@@ -212,4 +212,4 @@ class SimulationVisualizer:
             plt.savefig('circular_mesh.png', dpi=120, bbox_inches='tight')
             print("✓ Saved mesh plot: circular_mesh.png")
         
-        plt.show()
+        #plt.show()

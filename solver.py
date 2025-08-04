@@ -7,7 +7,7 @@ import numpy as np
 import time
 import warnings
 from config import SimulationConfig, PETSC_AVAILABLE
-from mesh_generator import ProfessionalCircularMeshGenerator as CircularMeshGenerator
+from mesh_generator import CircularMeshGenerator as CircularMeshGenerator
 from material_models import FilmMaterial, SubstrateMaterial, DamageModel, ElasticEnergyCalculator
 from finite_element import TriangularElement, ElementAssembler
 from petsc_solver import DisplacementSolver, DamageSolver

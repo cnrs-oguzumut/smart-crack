@@ -15,13 +15,13 @@ def main():
     config = SimulationConfig()
     
     # Override default parameters if needed
-    config.MESH_RESOLUTION = 0.06  # This will be ignored if restarting
-    config.N_STEPS = 46
-    config.MAX_DISPLACEMENT = 1.3
+    config.MESH_RESOLUTION = 0.01  # This will be ignored if restarting
+    config.N_STEPS = 200
+    config.MAX_DISPLACEMENT = 3.
     config.PLOT_FREQUENCY = 5
     config.IRREVERSIBILITY_THRESHOLD = 0.0
     config.USE_VI_SOLVER = True
-    config.RESTART_SIMULATION = True  # Set this for restart
+    config.RESTART_SIMULATION = False  # Set this for restart
     
     MODEL_TO_TEST = 'AT1'
     
