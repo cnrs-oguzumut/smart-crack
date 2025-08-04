@@ -233,3 +233,5 @@ For bugs and feature requests, please open an issue with:
 - Problem description
 - Minimal reproducible example
 - System information (OS, Python version, PETSc version)
+- <img width="2149" height="1419" alt="at1_2d_solver_step_046" src="https://github.com/user-attachments/assets/cfa72c81-c205-4c97-8d07-de998c4d9d98" />
+- <img width="2149" height="1419" alt="at1_2d_solver_step_056" src="https://github.com/user-attachments/assets/9ed71de9-8b8c-438b-a1b3-94a693e1faf2" />
