@@ -9,32 +9,32 @@ class SimulationConfig:
     """Configuration class for simulation parameters."""
     
     # Mesh parameters
-    RADIUS = 1.0
+    RADIUS = 5
     MESH_RESOLUTION = 0.03
     
     # Material properties
     E_FILM = 1.0
-    E_SUBSTRATE = 0.5
+    E_SUBSTRATE = 1.
     NU_FILM = 0.3
     NU_SUBSTRATE = 0.3
     
-    # Phase-field parameters
-    LENGTH_SCALE = 0.013
-    COUPLING_PARAMETER = 0.34
-    SUBSTRATE_STIFFNESS = 0.5
+    # Pha   se-field parameters
+    LENGTH_SCALE = .2
+    COUPLING_PARAMETER = .75
+    SUBSTRATE_STIFFNESS = 1
     PSI_C_AT1 = 0.5
     PSI_C_AT2 = 0.0
     
     # Solver parameters
     MAX_NEWTON_ITER = 1000
-    NEWTON_RTOL = 1e-6
-    NEWTON_ATOL = 1e-6
+    NEWTON_RTOL = 1e-5
+    NEWTON_ATOL = 1e-5
     MAX_ALT_ITER = 200
-    ALT_TOL = 1e-8
+    ALT_TOL = 1e-5
     
     # Simulation parameters
     N_STEPS = 80
-    MAX_DISPLACEMENT = 1.5
+    MAX_DISPLACEMENT = 3.5
     PLOT_FREQUENCY = 5
     
     # Irreversibility

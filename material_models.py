@@ -17,7 +17,7 @@ class MaterialModel:
     def _compute_stiffness_matrix_isotropic(self):
         """Compute plane stress stiffness matrix for isotropic material."""
         factor = self.E / (1 - self.nu**2)
-        D = factor * np.array([
+        D =factor * np.array([
             [1, self.nu, 0],
             [self.nu, 1, 0],
             [0, 0, (1 - self.nu) / 2]
@@ -27,20 +27,29 @@ class MaterialModel:
     def _compute_stiffness_matrix_crystal(self):
         """Nickel single crystal in plane stress (FCC structure) - corrected."""
         # 3D elastic constants for Nickel
-        C11 = 1  # 246.5e9   # Stiffness along <100>
-        C12 = 147.3e9 / 246.5e9    # Cross-coupling
-        C44 = 124.7e9 / 246.5e9   # Shear stiffness <100>{001}
+        # C11 = 1  # 246.5e9   # Stiffness along <100>
+        # C12 = 147.3e9 / 246.5e9    # Cross-coupling
+        # C44 = 124.7e9 / 246.5e9   # Shear stiffness <100>{001}
         
-        # Plane stress reduction
-        C11_eff = C11 - C12**2/C11
-        C12_eff = C12 - C12**2/C11  
-        C44_eff = C44
+        # # Plane stress reduction
+        # C11_eff = 3.5#C11 - C12**2/C11
+        # C12_eff = 1.5 #C12 - C12**2/C11  
+        # C44_eff = 1.  #C44
         
-        D = np.array([
-            [C11_eff, C12_eff, 0],
-            [C12_eff, C11_eff, 0],
-            [0, 0, C44_eff]
+        # D = 0.25*769*np.array([
+        #     [C11_eff, C12_eff, 0],
+        #     [C12_eff, C11_eff, 0],
+        #     [0, 0, C44_eff]
+        # ])
+
+        factor = self.E / (1 - self.nu**2)
+        D = factor * np.array([
+            [1, self.nu, 0],
+            [self.nu, 1, 0],
+            [0, 0, (1 - self.nu) / 2]
         ])
+
+
         return D
 
     # Default implementation (will be overridden by subclasses)

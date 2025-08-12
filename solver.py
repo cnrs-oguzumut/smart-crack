@@ -7,7 +7,7 @@ import numpy as np
 import time
 import warnings
 from config import SimulationConfig, PETSC_AVAILABLE
-from mesh_generator import CircularMeshGenerator as CircularMeshGenerator
+from mesh_generator import ProfessionalRectangularMeshGenerator as  CircularMeshGenerator
 from material_models import FilmMaterial, SubstrateMaterial, DamageModel, ElasticEnergyCalculator
 from finite_element import TriangularElement, ElementAssembler
 from petsc_solver import DisplacementSolver, DamageSolver
@@ -72,7 +72,12 @@ class AT1_2D_ActiveSet_Solver:
         
         # Initialize boundary conditions
         mesh_coords = np.column_stack((self.x, self.y))
-        self.bc_displacement = RadialBoundaryConditions(mesh_coords, self.boundary_nodes)
+        self.bc_displacement = RadialBoundaryConditions(
+            mesh_coords, 
+            self.boundary_nodes,
+            loading_mode='biaxial',
+            biaxiality_ratio=1.)  
+              
         self.bc_damage = DamageBoundaryConditions(irreversibility_threshold)
         
         # Initialize visualization and state management
@@ -379,15 +384,15 @@ class AT1_2D_ActiveSet_Solver:
                 
                 # Damage residual terms
                 w_prime = self.damage_model.damage_potential_derivative(d_gp)
-                
+                GC = 8/15
                 # Regularization term
-                regularization = w_prime * N
+                regularization = GC*(3./8.)*w_prime* N/self.l
                 
                 # Gradient term
-                gradient_term = self.l**2 * (d_grad[0] * dN_dx + d_grad[1] * dN_dy)
+                gradient_term = GC*(3./8.)*self.l* (d_grad[0] * dN_dx + d_grad[1] * dN_dy)
                 
                 # Driving force term
-                driving_term = -self.damage_model.compute_driving_force(psi_pos, d_gp) * N
+                driving_term = -GC*self.damage_model.compute_driving_force(psi_pos, d_gp) * N
                 
                 # For Gauss point collection
                 if collect_gauss_points:
@@ -453,11 +458,11 @@ class AT1_2D_ActiveSet_Solver:
                 f_int_v = np.dot(B.T, stress_v) * detJ * w_gp[gp]
                 
                 # Coupling forces (film-substrate interaction)
-                coupling_factor = 1.0 / self.Lambda**2
+                coupling_factor = self.Lambda
                 f_coupling = np.zeros(6)
                 for i in range(3):
                     # Coupling force = (u - v) / Lambda^2
-                    f_coupling[2*i] = coupling_factor * (u_gp[0] - v_gp[0]) * N[i] * detJ * w_gp[gp]
+                    f_coupling[2*i]   = coupling_factor * (u_gp[0] - v_gp[0]) * N[i] * detJ * w_gp[gp]
                     f_coupling[2*i+1] = coupling_factor * (u_gp[1] - v_gp[1]) * N[i] * detJ * w_gp[gp]
                 
                 # Assemble element residuals
@@ -505,7 +510,7 @@ class AT1_2D_ActiveSet_Solver:
                 K_substrate = np.dot(B.T, np.dot(self.substrate_material.D, B)) * detJ * w_gp[gp]
                 
                 # Coupling stiffness
-                coupling_factor = 1.0 / self.Lambda**2
+                coupling_factor = self.Lambda
                 K_coupling = np.zeros((6, 6))
                 for i in range(3):
                     for j in range(3):
@@ -611,12 +616,12 @@ class AT1_2D_ActiveSet_Solver:
                 
                 # Regularization contribution
                 regularization_contrib = w_double_prime * np.outer(N, N)
-                
+                GC=8/15
                 # Gradient contribution
-                gradient_contrib = self.l**2 * (np.outer(dN_dx, dN_dx) + np.outer(dN_dy, dN_dy))
+                gradient_contrib = GC*(3./8.)*self.l*(np.outer(dN_dx, dN_dx) + np.outer(dN_dy, dN_dy))
                 
                 # Driving force contribution
-                driving_contrib = 2.0 * psi_pos * np.outer(N, N)
+                driving_contrib = GC*2.0 * psi_pos * np.outer(N, N)
                 
                 K_dd += (regularization_contrib + gradient_contrib + driving_contrib) * detJ * w_gp[gp]
             

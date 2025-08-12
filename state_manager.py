@@ -50,7 +50,7 @@ class SimulationStateManager:
                 'config_use_vi_solver': np.array([solver.use_vi_solver]),
                 
                 # Boundary condition parameters
-                'bc_applied_displacement': np.array([solver.bc_displacement.applied_displacement]),
+                'bc_applied_displacement': np.array([getattr(solver.bc_displacement, 'applied_displacement', 0.0)]),
                 'bc_irreversibility_threshold': np.array([solver.bc_damage.irreversibility_threshold]),
                 
                 # Material parameters (from config)
