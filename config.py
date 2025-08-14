@@ -10,7 +10,7 @@ class SimulationConfig:
     
     # Mesh parameters
     RADIUS = 200
-    MESH_RESOLUTION = 0.03
+    
     
     # Material properties
     E_FILM = 1.0
@@ -26,7 +26,8 @@ class SimulationConfig:
     
     # Pha   se-field parameters
     LENGTH_SCALE = 3.
-    COUPLING_PARAMETER = 0.75
+    MESH_RESOLUTION = LENGTH_SCALE/3
+    COUPLING_PARAMETER = 1.75
     SUBSTRATE_STIFFNESS = 1
     PSI_C_AT1 = 0.5
     PSI_C_AT2 = 0.0
@@ -39,9 +40,12 @@ class SimulationConfig:
     ALT_TOL = 1e-5
     
     # Simulation parameters
-    N_STEPS = 80
-    MAX_DISPLACEMENT = 3.5
-    PLOT_FREQUENCY = 5
+    N_STEPS = 200
+    MAX_DISPLACEMENT = .3
+    PLOT_FREQUENCY = 1
+    LOADING_MODE = "biaxial"
+    BIAXIALITY_RATIO=.8 
+
     
     # Irreversibility
     IRREVERSIBILITY_THRESHOLD = 0.0

@@ -1,6 +1,7 @@
 """
 Complete state management module for simulation restart and checkpointing.
 Handles saving and loading of COMPLETE simulation state including mesh.
+Updated to include all new configuration parameters.
 """
 
 import numpy as np
@@ -43,24 +44,35 @@ class SimulationStateManager:
                 'mesh_n_nodes': np.array([solver.n_nodes]),
                 'mesh_n_elements': np.array([solver.n_elem]),
                 
-                # Configuration parameters
-                'config_radius': np.array([solver.radius]),
-                'config_mesh_resolution': np.array([getattr(solver, 'mesh_resolution', 0.05)]),
+                # Configuration parameters - UPDATED
+                'config_radius': np.array([getattr(solver, 'radius', solver.config.RADIUS)]),
+                'config_mesh_resolution': np.array([getattr(solver, 'mesh_resolution', solver.config.MESH_RESOLUTION)]),
                 'config_model_type': solver.model_type.encode('utf-8'),  # String to bytes
-                'config_use_vi_solver': np.array([solver.use_vi_solver]),
+                'config_use_vi_solver': np.array([getattr(solver, 'use_vi_solver', solver.config.USE_VI_SOLVER)]),
+                'config_restart_simulation': np.array([solver.config.RESTART_SIMULATION]),
+                'config_loading_mode': solver.config.LOADING_MODE.encode('utf-8') if hasattr(solver.config, 'LOADING_MODE') else b'radial',
+                'config_biaxiality_ratio': np.array([getattr(solver.config, 'BIAXIALITY_RATIO', 1.0)]),
                 
                 # Boundary condition parameters
                 'bc_applied_displacement': np.array([getattr(solver.bc_displacement, 'applied_displacement', 0.0)]),
-                'bc_irreversibility_threshold': np.array([solver.bc_damage.irreversibility_threshold]),
+                'bc_irreversibility_threshold': np.array([getattr(solver.bc_damage, 'irreversibility_threshold', solver.config.IRREVERSIBILITY_THRESHOLD)]),
                 
-                # Material parameters (from config)
+                # Material parameters - UPDATED with new properties
                 'material_E_film': np.array([solver.config.E_FILM]),
                 'material_E_substrate': np.array([solver.config.E_SUBSTRATE]),
                 'material_nu_film': np.array([solver.config.NU_FILM]),
                 'material_nu_substrate': np.array([solver.config.NU_SUBSTRATE]),
+                'material_HF': np.array([solver.config.HF]),
+                'material_HS': np.array([solver.config.HS]),
+                'material_CHI': np.array([solver.config.CHI]),
+                'material_GC': np.array([solver.config.GC]),
+                'material_AT1': np.array([solver.config.AT1]),
+                'material_AT2': np.array([solver.config.AT2]),
                 'material_length_scale': np.array([solver.config.LENGTH_SCALE]),
                 'material_coupling_param': np.array([solver.config.COUPLING_PARAMETER]),
                 'material_substrate_stiffness': np.array([solver.config.SUBSTRATE_STIFFNESS]),
+                'material_PSI_C_AT1': np.array([solver.config.PSI_C_AT1]),
+                'material_PSI_C_AT2': np.array([solver.config.PSI_C_AT2]),
                 
                 # Solver parameters
                 'solver_max_newton_iter': np.array([solver.config.MAX_NEWTON_ITER]),
@@ -74,9 +86,12 @@ class SimulationStateManager:
                 'sim_max_displacement': np.array([solver.config.MAX_DISPLACEMENT]),
                 'sim_plot_frequency': np.array([solver.config.PLOT_FREQUENCY]),
                 
+                # File configuration
+                'config_state_file': solver.config.STATE_FILE.encode('utf-8'),
+                
                 # Metadata
                 'save_timestamp': datetime.now().isoformat().encode('utf-8'),
-                'version': np.array([1.0])  # Version for future compatibility
+                'version': np.array([2.0])  # Updated version for new config format
             }
             
             # Save to file
@@ -87,6 +102,7 @@ class SimulationStateManager:
             print(f"      ✅ Complete state saved to {filename}")
             print(f"         File size: {file_size:.2f} MB")
             print(f"         Contains: mesh ({solver.n_nodes} nodes), solution fields, all parameters")
+            print(f"         Version: 2.0 (updated config format)")
             
             return True
             
@@ -114,6 +130,9 @@ class SimulationStateManager:
             
             data = np.load(filename, allow_pickle=True)
             
+            # Check version for backward compatibility
+            version = float(data['version'][0]) if 'version' in data else 1.0
+            
             # Extract all data
             state = {
                 # Solution fields
@@ -136,12 +155,15 @@ class SimulationStateManager:
                 'mesh_resolution': float(data['config_mesh_resolution'][0]),
                 'model_type': data['config_model_type'].tobytes().decode('utf-8'),
                 'use_vi_solver': bool(data['config_use_vi_solver'][0]),
+                'restart_simulation': bool(data['config_restart_simulation'][0]) if version >= 2.0 else True,
+                'loading_mode': data['config_loading_mode'].tobytes().decode('utf-8') if 'config_loading_mode' in data else 'radial',
+                'biaxiality_ratio': float(data['config_biaxiality_ratio'][0]) if 'config_biaxiality_ratio' in data else 1.0,
                 
                 # Boundary condition parameters
                 'applied_displacement': float(data['bc_applied_displacement'][0]),
                 'irreversibility_threshold': float(data['bc_irreversibility_threshold'][0]),
                 
-                # Material parameters
+                # Material parameters - Basic (always present)
                 'E_FILM': float(data['material_E_film'][0]),
                 'E_SUBSTRATE': float(data['material_E_substrate'][0]),
                 'NU_FILM': float(data['material_nu_film'][0]),
@@ -164,13 +186,42 @@ class SimulationStateManager:
                 
                 # Metadata
                 'save_timestamp': data['save_timestamp'].tobytes().decode('utf-8') if 'save_timestamp' in data else 'unknown',
-                'version': float(data['version'][0]) if 'version' in data else 1.0
+                'version': version
             }
+            
+            # Add new material parameters if available (version 2.0+)
+            if version >= 2.0:
+                state.update({
+                    'HF': float(data['material_HF'][0]),
+                    'HS': float(data['material_HS'][0]),
+                    'CHI': float(data['material_CHI'][0]),
+                    'GC': float(data['material_GC'][0]),
+                    'AT1': float(data['material_AT1'][0]),
+                    'AT2': float(data['material_AT2'][0]),
+                    'PSI_C_AT1': float(data['material_PSI_C_AT1'][0]),
+                    'PSI_C_AT2': float(data['material_PSI_C_AT2'][0]),
+                    'STATE_FILE': data['config_state_file'].tobytes().decode('utf-8')
+                })
+            else:
+                # Provide defaults for backward compatibility
+                print(f"      📄 Loading version {version} file - using defaults for new parameters")
+                state.update({
+                    'HF': 0.25,
+                    'HS': 25,
+                    'CHI': 769,
+                    'GC': 1,
+                    'AT1': 1,
+                    'AT2': 2,
+                    'PSI_C_AT1': 0.5,
+                    'PSI_C_AT2': 0.0,
+                    'STATE_FILE': "simulation_state.npz"
+                })
             
             # Print summary
             file_size = os.path.getsize(filename) / (1024 * 1024)  # MB
             print(f"      ✅ Complete state loaded successfully!")
             print(f"         File size: {file_size:.2f} MB")
+            print(f"         Version: {version}")
             print(f"         Saved on: {state['save_timestamp']}")
             print(f"         Model: {state['model_type']}, Step: {state['load_step']}")
             print(f"         Mesh: {state['n_nodes']} nodes, {state['n_elements']} elements")
@@ -184,6 +235,67 @@ class SimulationStateManager:
             print(f"         Error: {e}")
             import traceback
             traceback.print_exc()
+            return None
+    
+    def create_config_from_state(self, state):
+        """
+        Create a new SimulationConfig object from loaded state data.
+        
+        Parameters:
+        -----------
+        state : dict
+            State data from load_complete_state()
+            
+        Returns:
+        --------
+        SimulationConfig: New config object with state parameters
+        """
+        try:
+            # Import the config class
+            from config import SimulationConfig
+            
+            # Create new config instance
+            config = SimulationConfig()
+            
+            # Update all parameters from state
+            config.RADIUS = state['radius']
+            config.MESH_RESOLUTION = state['mesh_resolution']
+            config.E_FILM = state['E_FILM']
+            config.E_SUBSTRATE = state['E_SUBSTRATE']
+            config.NU_FILM = state['NU_FILM']
+            config.NU_SUBSTRATE = state['NU_SUBSTRATE']
+            config.HF = state['HF']
+            config.HS = state['HS']
+            config.CHI = state['CHI']
+            config.GC = state['GC']
+            config.AT1 = state['AT1']
+            config.AT2 = state['AT2']
+            config.LENGTH_SCALE = state['LENGTH_SCALE']
+            config.COUPLING_PARAMETER = state['COUPLING_PARAMETER']
+            config.SUBSTRATE_STIFFNESS = state['SUBSTRATE_STIFFNESS']
+            config.PSI_C_AT1 = state['PSI_C_AT1']
+            config.PSI_C_AT2 = state['PSI_C_AT2']
+            config.MAX_NEWTON_ITER = state['MAX_NEWTON_ITER']
+            config.NEWTON_RTOL = state['NEWTON_RTOL']
+            config.NEWTON_ATOL = state['NEWTON_ATOL']
+            config.MAX_ALT_ITER = state['MAX_ALT_ITER']
+            config.ALT_TOL = state['ALT_TOL']
+            config.N_STEPS = state['N_STEPS']
+            config.MAX_DISPLACEMENT = state['MAX_DISPLACEMENT']
+            config.PLOT_FREQUENCY = state['PLOT_FREQUENCY']
+            config.IRREVERSIBILITY_THRESHOLD = state['irreversibility_threshold']
+            config.STATE_FILE = state['STATE_FILE']
+            config.USE_VI_SOLVER = state['use_vi_solver']
+            config.RESTART_SIMULATION = state['restart_simulation']
+            config.LOADING_MODE = state['loading_mode']
+            config.BIAXIALITY_RATIO = state['biaxiality_ratio']
+            
+            print(f"      ⚙️ Configuration reconstructed from state (version {state['version']})")
+            
+            return config
+            
+        except Exception as e:
+            print(f"      ❌ ERROR: Failed to create config from state: {e}")
             return None
     
     # LEGACY METHODS - Keep for backward compatibility with existing code
@@ -287,7 +399,8 @@ class SimulationStateManager:
                 for i, file in enumerate(state_files, 1):
                     info = self.get_state_info(file)
                     if info:
-                        file_type = "Complete" if 'mesh_resolution' in info else "Legacy"
+                        version = info.get('version', 1.0)
+                        file_type = f"v{version:.1f}" if 'mesh_resolution' in info else "Legacy"
                         print(f"  {i}. {file} [{file_type}] - Step {info.get('load_step', '?')}, "
                               f"Damage: {info.get('max_damage', 0):.3f}")
                     else:
@@ -323,6 +436,7 @@ class SimulationStateManager:
                 info['mesh_resolution'] = float(data['config_mesh_resolution'][0])
                 info['model_type'] = data['config_model_type'].tobytes().decode('utf-8')
                 info['save_timestamp'] = data['save_timestamp'].tobytes().decode('utf-8') if 'save_timestamp' in data else 'unknown'
+                info['version'] = float(data['version'][0]) if 'version' in data else 1.0
             
             file_size = os.path.getsize(filename) / (1024 * 1024)  # MB
             info['file_size_mb'] = file_size

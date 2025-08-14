@@ -8,20 +8,37 @@ import numpy as np
 class MaterialModel:
     """Base class for material models."""
     
-    def __init__(self, E, nu):
+    def __init__(self, E, nu, hf, hs, chi):
         """Initialize material with Young's modulus and Poisson's ratio."""
         self.E = E
         self.nu = nu
+        self.hf = hf
+        self.hs = hs
+        self.chi = chi
+
         self.D = self._compute_stiffness_matrix()
     
     def _compute_stiffness_matrix_isotropic(self):
         """Compute plane stress stiffness matrix for isotropic material."""
-        factor = self.E / (1 - self.nu**2)
+        factor = self.chi*self.hs*self.E / (1 - self.nu**2)
         D =factor * np.array([
             [1, self.nu, 0],
             [self.nu, 1, 0],
             [0, 0, (1 - self.nu) / 2]
         ])
+
+        # C11_eff = 0.06999999999999999  # Stiffness along <100>
+        # C12_eff = 0.03  # Cross-coupling
+        # C44_eff = 0.02  # Shear stiffness <100>{001}
+
+        # D =  self.hs*self.chi*np.array([
+        #     [C11_eff, C12_eff, 0],
+        #     [C12_eff, C11_eff, 0],
+        #     [0, 0, C44_eff]
+        # ])
+
+
+
         return D
 
     def _compute_stiffness_matrix_crystal(self):
@@ -30,24 +47,30 @@ class MaterialModel:
         # C11 = 1  # 246.5e9   # Stiffness along <100>
         # C12 = 147.3e9 / 246.5e9    # Cross-coupling
         # C44 = 124.7e9 / 246.5e9   # Shear stiffness <100>{001}
-        
-        # # Plane stress reduction
-        # C11_eff = 3.5#C11 - C12**2/C11
-        # C12_eff = 1.5 #C12 - C12**2/C11  
-        # C44_eff = 1.  #C44
-        
-        # D = 0.25*769*np.array([
-        #     [C11_eff, C12_eff, 0],
-        #     [C12_eff, C11_eff, 0],
-        #     [0, 0, C44_eff]
-        # ])
 
-        factor = self.E / (1 - self.nu**2)
-        D = factor * np.array([
-            [1, self.nu, 0],
-            [self.nu, 1, 0],
-            [0, 0, (1 - self.nu) / 2]
+
+        C11 = 246.5e9 / 124.7e9   # Stiffness along <100>
+        C12 = 147.3e9 / 124.7e9   # Cross-coupling
+        C44 = 124.7e9 / 124.7e9   # Shear stiffness <100>{001}
+
+
+        # Plane stress reduction
+        C11_eff = C11 - C12**2/C11
+        C12_eff = C12 - C12**2/C11  
+        C44_eff = C44
+        
+        D = self.hf*self.chi*np.array([
+            [C11_eff, C12_eff, 0],
+            [C12_eff, C11_eff, 0],
+            [0, 0, C44_eff]
         ])
+
+        # factor = 749*0.25*self.E / (1 - self.nu**2)
+        # D = factor * np.array([
+        #     [1, self.nu, 0],
+        #     [self.nu, 1, 0],
+        #     [0, 0, (1 - self.nu) / 2]
+        # ])
 
 
         return D
@@ -61,10 +84,10 @@ class MaterialModel:
 class FilmMaterial(MaterialModel):
     """Film material with damage coupling - uses single crystal elasticity."""
     
-    def __init__(self, E=1.0, nu=0.3):
-        super().__init__(E, nu)
+    def __init__(self, E=1.0, nu=0.3, hf=1.0, hs=1.0, chi=1.0):  # Add missing parameters
+        super().__init__(E, nu, hf, hs, chi)  # Pass all 5 parameters
     
-    def _compute_stiffness_matrix(self):
+    def _compute_stiffness_matrix(self):  # Add underscore to match parent
         """Override to use crystal elasticity for film."""
         return self._compute_stiffness_matrix_crystal()
     
@@ -78,13 +101,12 @@ class FilmMaterial(MaterialModel):
         """Degradation function g(d) = (1-d)^2."""
         return (1 - d)**2 + 1e-6
 
-
 class SubstrateMaterial(MaterialModel):
     """Substrate material without damage - uses isotropic elasticity."""
     
-    def __init__(self, E=0.5, nu=0.3):
-        super().__init__(E, nu)
-    
+    def __init__(self, E=1.0, nu=0.3, hf=1.0, hs=1.0, chi=1.0):  # Add missing parameters
+        super().__init__(E, nu, hf, hs, chi)  # Pass all 5 parameters
+
     def _compute_stiffness_matrix(self):
         """Override to use isotropic elasticity for substrate."""
         return self._compute_stiffness_matrix_isotropic()
@@ -135,3 +157,5 @@ class ElasticEnergyCalculator:
     def compute_strain_from_displacement(u_element, B_matrix):
         """Compute strain from displacement using B-matrix."""
         return np.dot(B_matrix, u_element.flatten())
+        # return np.dot(B_matrix, u_element.T.flatten())  # Transpose first, then flatten
+    

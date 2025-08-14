@@ -8,6 +8,8 @@ import time
 import warnings
 from config import SimulationConfig, PETSC_AVAILABLE
 from mesh_generator import ProfessionalRectangularMeshGenerator as  CircularMeshGenerator
+#from mesh_generator import ProfessionalCircularMeshGenerator as  CircularMeshGenerator
+
 from material_models import FilmMaterial, SubstrateMaterial, DamageModel, ElasticEnergyCalculator
 from finite_element import TriangularElement, ElementAssembler
 from petsc_solver import DisplacementSolver, DamageSolver
@@ -76,8 +78,8 @@ class AT1_2D_ActiveSet_Solver:
         self.bc_displacement = RadialBoundaryConditions(
             mesh_coords, 
             self.boundary_nodes,
-            loading_mode='biaxial',
-            biaxiality_ratio=.2)  
+            loading_mode=self.loading_mode,
+            biaxiality_ratio=.8)  
               
         self.bc_damage = DamageBoundaryConditions(irreversibility_threshold)
         
@@ -110,6 +112,8 @@ class AT1_2D_ActiveSet_Solver:
         self.chi = self.config.CHI
         self.at1 = self.config.AT1
         self.at2 = self.config.AT2
+        self.loading_mode = self.config.LOADING_MODE
+        self.biaxiality_ratio = self.config.BIAXIALITY_RATIO
         
         # NOW create materials with all required parameters
         self.film_material = FilmMaterial(
@@ -182,26 +186,11 @@ class AT1_2D_ActiveSet_Solver:
             print("❌ Failed to load state. Cannot create solver.")
             return None
         
-        # Create config from saved state
-        from config import SimulationConfig
-        config = SimulationConfig()
-        
-        # Update config with saved values
-        config.E_FILM = state['E_FILM']
-        config.E_SUBSTRATE = state['E_SUBSTRATE']
-        config.NU_FILM = state['NU_FILM']
-        config.NU_SUBSTRATE = state['NU_SUBSTRATE']
-        config.LENGTH_SCALE = state['LENGTH_SCALE']
-        config.COUPLING_PARAMETER = state['COUPLING_PARAMETER']
-        config.SUBSTRATE_STIFFNESS = state['SUBSTRATE_STIFFNESS']
-        config.MAX_NEWTON_ITER = state['MAX_NEWTON_ITER']
-        config.NEWTON_RTOL = state['NEWTON_RTOL']
-        config.NEWTON_ATOL = state['NEWTON_ATOL']
-        config.MAX_ALT_ITER = state['MAX_ALT_ITER']
-        config.ALT_TOL = state['ALT_TOL']
-        config.N_STEPS = state['N_STEPS']
-        config.MAX_DISPLACEMENT = state['MAX_DISPLACEMENT']
-        config.PLOT_FREQUENCY = state['PLOT_FREQUENCY']
+        # Create config from saved state using the state manager's method
+        config = state_manager.create_config_from_state(state)
+        if config is None:
+            print("❌ Failed to create config from state.")
+            return None
         
         # Apply overrides if provided
         if config_override:
@@ -237,25 +226,51 @@ class AT1_2D_ActiveSet_Solver:
         
         # Initialize boundary conditions with loaded mesh
         mesh_coords = np.column_stack((solver.x, solver.y))
-        solver.bc_displacement = RadialBoundaryConditions(mesh_coords, solver.boundary_nodes)
-        solver.bc_displacement.set_applied_displacement(state['applied_displacement'])
         
-        from boundary_conditions import DamageBoundaryConditions
+        # Check if LOADING_MODE and BIAXIALITY_RATIO are available
+        loading_mode = state.get('loading_mode', 'radial')
+        biaxiality_ratio = state.get('biaxiality_ratio', 1.0)
+        
+        # Always use RadialBoundaryConditions for all loading modes
+        from boundary_conditions import RadialBoundaryConditions, DamageBoundaryConditions
+        solver.bc_displacement = RadialBoundaryConditions(
+            mesh_coords, 
+            solver.boundary_nodes,
+            loading_mode=loading_mode,
+            biaxiality_ratio=biaxiality_ratio
+        )
+        
+        # Store loading parameters for reference
+        solver.loading_mode = loading_mode
+        solver.biaxiality_ratio = biaxiality_ratio
+        
+        if loading_mode.lower() == 'biaxial':
+            print(f"📋 Note: Biaxial mode loaded (ratio: {biaxiality_ratio}) but using RadialBoundaryConditions")
+        else:
+            print(f"✓ Radial boundary conditions initialized")
+        
+        solver.bc_displacement.set_applied_displacement(state['applied_displacement'])
         solver.bc_damage = DamageBoundaryConditions(state['irreversibility_threshold'])
         
         # Initialize visualization
+        from visualization import SimulationVisualizer
         solver.visualizer = SimulationVisualizer(solver.x, solver.y, solver.connectivity)
         solver.state_manager = SimulationStateManager()
         
         # Initialize VTK visualizer if available
-        if VTK_AVAILABLE:
-            try:
-                solver.vtk_visualizer = VTKVisualizer(solver.x, solver.y, solver.connectivity)
-                print("✓ VTK visualizer initialized")
-            except Exception as e:
-                print(f"⚠ VTK visualizer failed: {e}")
+        try:
+            from visualization import VTK_AVAILABLE, VTKVisualizer
+            if VTK_AVAILABLE:
+                try:
+                    solver.vtk_visualizer = VTKVisualizer(solver.x, solver.y, solver.connectivity)
+                    print("✓ VTK visualizer initialized")
+                except Exception as e:
+                    print(f"⚠ VTK visualizer failed: {e}")
+                    solver.vtk_visualizer = None
+            else:
                 solver.vtk_visualizer = None
-        else:
+        except ImportError:
+            print("⚠ VTK not available")
             solver.vtk_visualizer = None
         
         # Initialize PETSc solvers
@@ -271,10 +286,10 @@ class AT1_2D_ActiveSet_Solver:
         print(f"   Model: {state['model_type']}, Step: {state['load_step']}")
         print(f"   Mesh: {state['n_nodes']} nodes, {state['n_elements']} elements")
         print(f"   Resolution: {state['mesh_resolution']:.4f}")
+        print(f"   Loading: {loading_mode} (ratio: {biaxiality_ratio})")
         print(f"   Max damage: {np.max(state['d']):.4f}")
         
         return solver
-    
     def solve_load_step(self, applied_displacement):
         """Solve one load step using alternating minimization."""
         self.load_step += 1
