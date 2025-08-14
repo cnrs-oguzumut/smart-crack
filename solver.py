@@ -79,7 +79,7 @@ class AT1_2D_ActiveSet_Solver:
             mesh_coords, 
             self.boundary_nodes,
             loading_mode=self.loading_mode,
-            biaxiality_ratio=.8)  
+            biaxiality_ratio=self.biaxiality_ratio)  
               
         self.bc_damage = DamageBoundaryConditions(irreversibility_threshold)
         

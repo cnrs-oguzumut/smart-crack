@@ -9,7 +9,7 @@ class SimulationConfig:
     """Configuration class for simulation parameters."""
     
     # Mesh parameters
-    RADIUS = 200
+    RADIUS = 400
     
     
     # Material properties
@@ -18,11 +18,11 @@ class SimulationConfig:
     NU_FILM = 0.3
     NU_SUBSTRATE = 0.3
     HF=0.25
-    HS=25
-    CHI=769
-    GC=1
-    AT1=1
-    AT2=2
+    HS=25.
+    CHI=769.
+    GC=1.
+    AT1=1.
+    AT2=2.
     
     # Pha   se-field parameters
     LENGTH_SCALE = 3.
@@ -40,11 +40,11 @@ class SimulationConfig:
     ALT_TOL = 1e-5
     
     # Simulation parameters
-    N_STEPS = 200
+    N_STEPS = 50
     MAX_DISPLACEMENT = .3
     PLOT_FREQUENCY = 1
     LOADING_MODE = "biaxial"
-    BIAXIALITY_RATIO=.8 
+    BIAXIALITY_RATIO=1.
 
     
     # Irreversibility
