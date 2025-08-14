@@ -14,6 +14,7 @@ from petsc_solver import DisplacementSolver, DamageSolver
 from boundary_conditions import RadialBoundaryConditions, DamageBoundaryConditions
 from visualization import SimulationVisualizer
 from state_manager import SimulationStateManager
+from film_stress_calculator import FilmStressCalculator
 
 try:
     from vtk_visualizer import VTKVisualizer
@@ -76,7 +77,7 @@ class AT1_2D_ActiveSet_Solver:
             mesh_coords, 
             self.boundary_nodes,
             loading_mode='biaxial',
-            biaxiality_ratio=1.)  
+            biaxiality_ratio=.2)  
               
         self.bc_damage = DamageBoundaryConditions(irreversibility_threshold)
         
@@ -98,16 +99,37 @@ class AT1_2D_ActiveSet_Solver:
     
     def _setup_materials(self):
         """Setup material models."""
-        self.film_material = FilmMaterial(E=self.config.E_FILM, nu=self.config.NU_FILM)
-        self.substrate_material = SubstrateMaterial(E=self.config.E_SUBSTRATE, nu=self.config.NU_SUBSTRATE)
-        self.damage_model = DamageModel(self.model_type, self.config.LENGTH_SCALE)
-        self.energy_calc = ElasticEnergyCalculator()
         
-        # Store parameters for easy access
+        # Define parameters FIRST
         self.l = self.config.LENGTH_SCALE
         self.Lambda = self.config.COUPLING_PARAMETER
         self.rho = self.config.SUBSTRATE_STIFFNESS
-    
+        self.Gc = self.config.GC
+        self.hf = self.config.HF
+        self.hs = self.config.HS
+        self.chi = self.config.CHI
+        self.at1 = self.config.AT1
+        self.at2 = self.config.AT2
+        
+        # NOW create materials with all required parameters
+        self.film_material = FilmMaterial(
+            E=self.config.E_FILM, 
+            nu=self.config.NU_FILM,
+            hf=self.hf,
+            hs=self.hs,
+            chi=self.chi
+        )
+        
+        self.substrate_material = SubstrateMaterial(
+            E=self.config.E_SUBSTRATE, 
+            nu=self.config.NU_SUBSTRATE,
+            hf=self.hf,
+            hs=self.hs,
+            chi=self.chi
+        )
+        
+        self.damage_model = DamageModel(self.model_type, self.config.LENGTH_SCALE)
+        self.energy_calc = ElasticEnergyCalculator()    
     def _init_solvers(self):
         """Initialize PETSc solvers."""
         if not PETSC_AVAILABLE:
@@ -373,6 +395,7 @@ class AT1_2D_ActiveSet_Solver:
                 
                 # Film strain and positive elastic energy
                 strain = self.energy_calc.compute_strain_from_displacement(u_e, B)
+
                 elastic_energy_density = self.energy_calc.compute_positive_energy(
                     strain, self.film_material.D
                 )
@@ -384,15 +407,16 @@ class AT1_2D_ActiveSet_Solver:
                 
                 # Damage residual terms
                 w_prime = self.damage_model.damage_potential_derivative(d_gp)
-                GC = 8/15
+                # GC = 8/15
+                # GC=  0.25
                 # Regularization term
-                regularization = GC*(3./8.)*w_prime* N/self.l
+                regularization = self.hf*(3./8.)*w_prime* N/self.l
                 
                 # Gradient term
-                gradient_term = GC*(3./8.)*self.l* (d_grad[0] * dN_dx + d_grad[1] * dN_dy)
+                gradient_term = self.hf*(3./8.)*self.l* (d_grad[0] * dN_dx + d_grad[1] * dN_dy)
                 
                 # Driving force term
-                driving_term = -GC*self.damage_model.compute_driving_force(psi_pos, d_gp) * N
+                driving_term = -self.hf*self.damage_model.compute_driving_force(psi_pos, d_gp) * N
                 
                 # For Gauss point collection
                 if collect_gauss_points:
@@ -427,12 +451,18 @@ class AT1_2D_ActiveSet_Solver:
         element = TriangularElement()
         xi_gp, eta_gp, w_gp = element.gauss_points()
         
+        # Collect strains, stresses, and volumes for volume-weighted averaging
+        all_strains_u = []
+        all_stresses_u = []
+        all_volumes = []
+        all_strains_v = []
+        
         for e in range(self.n_elem):
             nodes = self.connectivity[e]
             u_e, v_e, d_e = u[nodes], v[nodes], self.d[nodes]
             coords = np.column_stack((self.x[nodes], self.y[nodes]))
             R_eu, R_ev = np.zeros((3, 2)), np.zeros((3, 2))
-            
+
             for gp in range(len(xi_gp)):
                 N, _, _ = element.shape_functions(xi_gp[gp], eta_gp[gp])
                 detJ, dN_dx, dN_dy = element.compute_jacobian(coords, xi_gp[gp], eta_gp[gp])
@@ -453,6 +483,14 @@ class AT1_2D_ActiveSet_Solver:
                 stress_u = self.film_material.compute_stress(strain_u, d_gp)
                 stress_v = self.substrate_material.compute_stress(strain_v)
                 
+                # Collect strains, stresses, and volumes (once per element)
+                if gp == 0:  # Only collect once per element
+                    element_volume = detJ * w_gp[gp]  # Element volume
+                    all_strains_u.append(strain_u)
+                    all_stresses_u.append(stress_u)
+                    all_volumes.append(element_volume)
+                    all_strains_v.append(strain_v)
+                
                 # Internal forces
                 f_int_u = np.dot(B.T, stress_u) * detJ * w_gp[gp]
                 f_int_v = np.dot(B.T, stress_v) * detJ * w_gp[gp]
@@ -461,22 +499,57 @@ class AT1_2D_ActiveSet_Solver:
                 coupling_factor = self.Lambda
                 f_coupling = np.zeros(6)
                 for i in range(3):
-                    # Coupling force = (u - v) / Lambda^2
+                    # Coupling force = (u - v) * K
                     f_coupling[2*i]   = coupling_factor * (u_gp[0] - v_gp[0]) * N[i] * detJ * w_gp[gp]
                     f_coupling[2*i+1] = coupling_factor * (u_gp[1] - v_gp[1]) * N[i] * detJ * w_gp[gp]
                 
                 # Assemble element residuals
                 R_eu += (f_int_u + f_coupling).reshape(3, 2)
                 R_ev += (f_int_v - f_coupling).reshape(3, 2)
-            
+
             R_u[nodes] += R_eu
             R_v[nodes] += R_ev
         
         # Apply boundary conditions
         self.bc_displacement.apply_displacement_bcs(u, v, R_u, R_v)
-        
         f.setArray(np.concatenate([R_u.flatten(), R_v.flatten()]))
-    
+        
+        # Volume-weighted averaging
+        # if len(all_stresses_u) > 0:
+        #     # Convert to numpy arrays
+        #     all_stresses_u = np.array(all_stresses_u)
+        #     all_strains_u = np.array(all_strains_u)
+        #     all_volumes = np.array(all_volumes)
+            
+        #     # Volume-weighted average stress: σ̄ = Σ(σᵢ × Vᵢ) / Σ(Vᵢ)
+        #     total_volume = np.sum(all_volumes)
+        #     weighted_stress_sum = np.sum(all_stresses_u * all_volumes[:, np.newaxis], axis=0)
+        #     volume_weighted_stress = weighted_stress_sum / total_volume
+            
+        #     # Volume-weighted average strain
+        #     weighted_strain_sum = np.sum(all_strains_u * all_volumes[:, np.newaxis], axis=0)
+        #     volume_weighted_strain = weighted_strain_sum / total_volume
+            
+        #     # Calculate von Mises stress
+        #     σxx = volume_weighted_stress[0]
+        #     σyy = volume_weighted_stress[1] 
+        #     τxy = volume_weighted_stress[2]
+        #     sigma_vm = np.sqrt(σxx**2 + σyy**2 - σxx*σyy + 3*τxy**2)
+            
+            # print(f"VOLUME-WEIGHTED - Avg strain: εxx={volume_weighted_strain[0]:.6f}, εyy={volume_weighted_strain[1]:.6f}")
+            # print(f"VOLUME-WEIGHTED - Avg stress: σxx={volume_weighted_stress[0]:.6f}, σyy={volume_weighted_stress[1]:.6f}")
+            # print(f"VOLUME-WEIGHTED - Avg stress: τxy={volume_weighted_stress[2]:.6f}, τxy={volume_weighted_stress[2]:.6f}")
+
+            # print(f"VOLUME-WEIGHTED - von Mises stress: σvm={sigma_vm:.6f}")
+            
+            # For comparison, also show simple average
+            # simple_avg_stress = np.mean(all_stresses_u, axis=0)
+            # simple_avg_strain = np.mean(all_strains_u, axis=0)
+            # print(f"SIMPLE AVERAGE - Avg strain: εxx={simple_avg_strain[0]:.6f}, εyy={simple_avg_strain[1]:.6f}")
+            # print(f"SIMPLE AVERAGE - Avg stress: σxx={simple_avg_stress[0]:.6f}, σyy={simple_avg_stress[1]:.6f}")
+
+
+
     def _displacement_jacobian(self, snes, x, J, P):
         """PETSc callback for displacement Jacobian with film-substrate coupling."""
         J.zeroEntries()
@@ -616,12 +689,13 @@ class AT1_2D_ActiveSet_Solver:
                 
                 # Regularization contribution
                 regularization_contrib = w_double_prime * np.outer(N, N)
-                GC=8/15
+                # GC=8/15
+                # GC=0.25
                 # Gradient contribution
-                gradient_contrib = GC*(3./8.)*self.l*(np.outer(dN_dx, dN_dx) + np.outer(dN_dy, dN_dy))
+                gradient_contrib = self.Gc*self.hf*(3./8.)*self.l*(np.outer(dN_dx, dN_dx) + np.outer(dN_dy, dN_dy))
                 
                 # Driving force contribution
-                driving_contrib = GC*2.0 * psi_pos * np.outer(N, N)
+                driving_contrib = self.Gc*self.hf*2.0 * psi_pos * np.outer(N, N)
                 
                 K_dd += (regularization_contrib + gradient_contrib + driving_contrib) * detJ * w_gp[gp]
             
@@ -642,6 +716,9 @@ class AT1_2D_ActiveSet_Solver:
         
         start_time = time.time()
         successful_steps = 0
+        self.film_calc = FilmStressCalculator('film_stress.csv')   
+         
+
         
         # Main simulation loop
         for step in range(start_step, n_steps):
@@ -660,6 +737,9 @@ class AT1_2D_ActiveSet_Solver:
             
             print(f"  Step {step+1} successful. Max damage: {max_damage:.4f}, "
                   f"Max film disp: {max_film_disp:.4f}, Max substrate disp: {max_substrate_disp:.4f}")
+            
+            self.film_calc.write_data(self, step + 1, applied_disp)
+
             
             # Compute and print damage residual info
             damage_residual = self.compute_damage_residual(self.u, self.d)
@@ -715,6 +795,7 @@ class AT1_2D_ActiveSet_Solver:
             print(f"  → Open 'vtk_output/phase_field_series.pvd' in ParaView for visualization")
         
         return successful_steps > 0
+    
     
     def plot_results_2d(self, step_number=None, save_png=False):
         """Plot the current solution fields including damage residual."""

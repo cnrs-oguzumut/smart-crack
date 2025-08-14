@@ -327,7 +327,7 @@ class ProfessionalRectangularMeshGenerator:
         
         # Map to rectangular domain
         self.width = 1.*radius
-        self.height = radius
+        self.height = .35*radius
         self.x_min, self.x_max = -self.width/2, self.width/2
         self.y_min, self.y_max = -self.height/2, self.height/2
         
@@ -464,8 +464,11 @@ class ProfessionalRectangularMeshGenerator:
         top_nodes = [n for n in all_boundary_nodes
                     if abs(vertices[n, 1] - self.y_max) < tolerance]
         
-        return np.array(sorted(left_nodes + right_nodes + bottom_nodes + top_nodes))    
-    
+        return np.array(sorted(left_nodes + right_nodes + bottom_nodes + top_nodes)) 
+        #return np.array(sorted(all_boundary_nodes))  
+
+        #return np.array(sorted(left_nodes + right_nodes ))    
+
     # Include the same helper methods as circular generator
     def _compute_quality_metrics(self, vertices, triangles):
         """Same as circular generator."""

@@ -53,9 +53,12 @@ class DisplacementSolver(PETScSolverBase):
         # Set up SNES
         self.snes.setFunction(self._residual_callback, self.solution.copy())
         self.snes.setJacobian(self._jacobian_callback, self.jacobian)
-        self.snes.setFromOptions()
+        ksp = self.snes.getKSP()
+        pc = ksp.getPC()
+        pc.setType('lu')
+        #pc.setType('gamg')     # ILU preconditioner
+        ksp.setTolerances(rtol=1e-6, atol=1e-12, max_it=1000)        # Callback functions (to be set by parent class)
         
-        # Callback functions (to be set by parent class)
         self.residual_function = None
         self.jacobian_function = None
     

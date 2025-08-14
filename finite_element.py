@@ -20,9 +20,13 @@ class TriangularElement:
     @staticmethod
     def gauss_points():
         """Gauss points and weights for triangular elements."""
-        xi = np.array([1/6, 2/3, 1/6])
-        eta = np.array([1/6, 1/6, 2/3])
-        w = np.array([1/6, 1/6, 1/6])
+        # xi = np.array([1/6, 2/3, 1/6])
+        # eta = np.array([1/6, 1/6, 2/3])
+        # w = np.array([1/6, 1/6, 1/6])
+        xi = np.array([1/3])
+        eta = np.array([1/3]) 
+        w = np.array([1/2])  # Weight = 1/2 (area of reference triangle)
+
         return xi, eta, w
     
     @staticmethod
@@ -32,10 +36,9 @@ class TriangularElement:
         x_e, y_e = nodes_coords[:, 0], nodes_coords[:, 1]
         
         J = np.array([
-            [np.dot(dN_dxi, x_e), np.dot(dN_deta, x_e)],
-            [np.dot(dN_dxi, y_e), np.dot(dN_deta, y_e)]
-        ])
-        
+            [np.dot(dN_dxi, x_e), np.dot(dN_dxi, y_e)],   # dx/dξ, dy/dξ
+            [np.dot(dN_deta, x_e), np.dot(dN_deta, y_e)]  # dx/dη, dy/dη
+        ])        
         detJ = np.linalg.det(J)
         if detJ <= 1e-12:
             raise ValueError(f"Negative/zero Jacobian: {detJ}")

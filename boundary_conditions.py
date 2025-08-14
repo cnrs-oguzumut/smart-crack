@@ -51,19 +51,30 @@ class RadialBoundaryConditions:
     
     def set_applied_displacement(self, displacement):
         """Set applied displacement and convert to strain for deformation gradient."""
-        # Assume displacement corresponds to strain on the boundary
-        # You may need to adjust this conversion based on your specific setup
         if self.domain_type == 'rectangular':
-            # For rectangular domain, assume displacement = strain * domain_size
             domain_size = max(np.max(self.x) - np.min(self.x), np.max(self.y) - np.min(self.y))
             self.applied_strain = displacement / domain_size if domain_size > 0 else displacement
         else:
-            # For circular domain, use displacement directly as strain
             self.applied_strain = displacement
         
         self._update_deformation_gradient()
-        print(f"Applied strain: {self.applied_strain:.6f}")
-    
+        # print(f"Applied strain: {self.applied_strain:.6f}")
+        
+        # # ADD OPTION 2 DEBUG HERE:
+        # print(f"DEBUG - Applied displacement: {displacement}")
+        # print(f"DEBUG - Domain size: {max(np.max(self.x) - np.min(self.x), np.max(self.y) - np.min(self.y))}")
+        # print(f"DEBUG - Loading mode: {self.loading_mode}")
+        # print(f"DEBUG - Biaxiality ratio: {self.biaxiality_ratio}")
+        # print(f"DEBUG - F matrix:\n{self.F}")
+        # print(f"DEBUG - F-I matrix:\n{self.F_minus_I}")
+        
+        # # Test a sample point to see displacement direction
+        # test_x, test_y = 32.0, 19.2  # A positive coordinate
+        # u_test_x, u_test_y = self._compute_displacement_from_deformation_gradient(test_x, test_y)
+        # print(f"DEBUG - Test point ({test_x}, {test_y}) → displacement: ({u_test_x:.6f}, {u_test_y:.6f})")
+
+
+
     def set_applied_strain(self, strain):
         """Directly set the applied strain."""
         self.applied_strain = strain
@@ -71,61 +82,71 @@ class RadialBoundaryConditions:
         print(f"Applied strain: {self.applied_strain:.6f}")
     
     def _update_deformation_gradient(self):
-        """Update deformation gradient F based on loading mode and applied strain."""
+        """Update strain tensor (stored as F) based on loading mode and applied strain for linear elasticity."""
         if self.loading_mode == 'uniaxial':
-            # Uniaxial loading: F11 = 1 + strain, F22 = 1 (plane stress assumption)
-            # or F22 = 1 - nu*strain for plane strain
+            # Uniaxial loading: εxx = applied_strain, εyy = 0 (plane stress)
             self.F = np.array([
-                [1.0 + self.applied_strain, 0.0],
-                [0.0, 1.0]  # Assume plane stress (no constraint in y-direction)
+                [self.applied_strain, 0.0],
+                [0.0, 0.0]  # Plane stress (free in y-direction)
             ])
-            print(f"Uniaxial F: strain_x = {self.applied_strain:.6f}, strain_y = 0")
+            print(f"Uniaxial strain: εxx = {self.applied_strain:.6f}, εyy = 0")
             
         elif self.loading_mode == 'biaxial':
-            # Biaxial loading: F11 = 1 + strain_x, F22 = 1 + strain_y
+            # Biaxial loading: εxx = strain_x, εyy = strain_y
+            print("self.applied_strain",self.applied_strain)
             strain_x = self.applied_strain
             strain_y = self.applied_strain * self.biaxiality_ratio
-            
             self.F = np.array([
-                [1.0 + strain_x, 0.0],
-                [0.0, 1.0 + strain_y]
+                [strain_x, 0.0],
+                [0.0, strain_y]
             ])
-            print(f"Biaxial F: strain_x = {strain_x:.6f}, strain_y = {strain_y:.6f}")
+            print(f"Biaxial strain: εxx = {strain_x:.6f}, εyy = {strain_y:.6f}")
+            
+        elif self.loading_mode == 'shear':
+            # Pure shear loading: εxy = γ/2 (engineering shear strain γ)
+            shear_strain = self.applied_strain / 2.0  # Convert engineering to tensor shear
+            self.F = np.array([
+                [0.0, shear_strain],
+                [shear_strain, 0.0]  # Symmetric tensor
+            ])
+            print(f"Shear strain: γ = {self.applied_strain:.6f}, εxy = {shear_strain:.6f}")
             
         elif self.loading_mode == 'circular':
-            # Radial loading: isotropic expansion
+            # Isotropic loading: εxx = εyy = applied_strain
             self.F = np.array([
-                [1.0 + self.applied_strain, 0.0],
-                [0.0, 1.0 + self.applied_strain]
+                [self.applied_strain, 0.0],
+                [0.0, self.applied_strain]
             ])
-            print(f"Radial F: strain_r = {self.applied_strain:.6f}")
+            print(f"Isotropic strain: ε = {self.applied_strain:.6f}")
             
         else:
-            # Default to identity
-            self.F = np.eye(2)
-            print("Default F: Identity matrix")
-        
-        # Compute F - I for displacement calculation
-        self.F_minus_I = self.F - np.eye(2)
-    
+            # Default to zero strain
+            self.F = np.zeros((2, 2))
+            print("Default strain: Zero tensor")
+            
+        # Store strain tensor directly (no F-I needed for linear elasticity)
+        self.F_minus_I = self.F.copy()
+
     def _compute_displacement_from_deformation_gradient(self, x_coord, y_coord):
         """
-        Compute displacement u = X·(F - I) for a given position X = [x_coord, y_coord].
+        Compute displacement from strain tensor for linear elasticity.
+        u = ε · X where X = [x_coord, y_coord]
         
         Parameters:
         - x_coord, y_coord: Reference coordinates
-        
         Returns:
         - u_x, u_y: Displacement components
         """
         X = np.array([x_coord, y_coord])
-        u = np.dot(self.F_minus_I, X)
+        u = np.dot(self.F_minus_I, X)  # F_minus_I now contains strain tensor
         return u[0], u[1]
     
     def apply_displacement_bcs(self, u, v, R_u, R_v):
         """Apply displacement boundary conditions to substrate using deformation gradient."""
         if abs(self.applied_strain) < 1e-12:
             return
+        # print(f"Film boundary displacements before BC:")
+        # print(f"  u[boundary[0:3]] = {u[self.boundary_nodes[:3]]}")
         
         # Apply to substrate displacement field (v)
         for node_idx in self.boundary_nodes:
@@ -139,6 +160,13 @@ class RadialBoundaryConditions:
             R_v[node_idx, 0] = v[node_idx, 0] - u_target_x
             R_v[node_idx, 1] = v[node_idx, 1] - u_target_y
     
+            # # Apply boundary condition to film
+            # R_u[node_idx, 0] = (u[node_idx, 0] - u_target_x)
+            # R_u[node_idx, 1] = (u[node_idx, 1] - u_target_y
+        # print(f"Film boundary residuals after BC:")
+        # print(f"  R_u[boundary[0:3]] = {R_u[self.boundary_nodes[:3]]}")
+
+
     def apply_displacement_jacobian_bcs(self, J_petsc, n_nodes):
         """Apply boundary conditions to displacement Jacobian."""
         if abs(self.applied_strain) < 1e-12:
@@ -146,14 +174,35 @@ class RadialBoundaryConditions:
         
         if PETSC_AVAILABLE:
             bc_dofs = []
-            
-            # Apply to substrate DOFs (v) - these are at indices 2*n_nodes + 2*node_idx
+
             for node_idx in self.boundary_nodes:
                 bc_dofs.extend([
-                    2 * n_nodes + 2 * node_idx,       # vx DOF
-                    2 * n_nodes + 2 * node_idx + 1    # vy DOF
+                    # Film DOFs (u) - indices 0 to 2*n_nodes-1
+                    # 2 * node_idx,     # ux DOF 
+                    # 2 * node_idx + 1 # uy DOF
+                    
+                    # Substrate DOFs (v) - indices 2*n_nodes to 4*n_nodes-1  
+                    2 * n_nodes + 2 * node_idx,     # vx DOF
+                    2 * n_nodes + 2 * node_idx + 1  # vy DOF
                 ])
-            
+
+
+            # # Apply to substrate DOFs (v) - these are at indices 2*n_nodes + 2*node_idx
+            # for node_idx in self.boundary_nodes:
+            #     bc_dofs.extend([
+            #         2 * n_nodes + 2 * node_idx,       # vx DOF
+            #         2 * n_nodes + 2 * node_idx + 1    # vy DOF
+            #     ])
+
+            # # Apply to substrate DOFs (v) - these are at indices 2*n_nodes + 2*node_idx
+            # # for node_idx in self.boundary_nodes:
+            # #     bc_dofs.extend([
+            # #         0 * n_nodes + 2 * node_idx,       # ux DOF
+            # #         0 * n_nodes + 2 * node_idx + 1    # uy DOF
+            # #     ])
+
+
+
             if bc_dofs:
                 bc_rows = np.array(bc_dofs, dtype=PETSc.IntType)
                 J_petsc.zeroRows(bc_rows, diag=1.0)

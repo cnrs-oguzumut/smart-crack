@@ -46,11 +46,15 @@ class VTKVisualizer:
         self.ugrid.SetCells(vtk.VTK_TRIANGLE, self.cells)
     
     def compute_stress_field(self, u, d, film_material):
-        """Compute stress field for visualization."""
+        """Compute stress field and element areas for visualization."""
         from finite_element import TriangularElement
         
         stress_field = np.zeros((self.n_nodes, 3))  # [σxx, σyy, σxy]
         node_count = np.zeros(self.n_nodes)  # For averaging
+        
+        # Add arrays to store element areas
+        element_areas_reference = np.zeros(self.n_elements)  # Reference configuration
+        element_areas_current = np.zeros(self.n_elements)    # Current/deformed configuration
         
         element = TriangularElement()
         xi_gp, eta_gp, w_gp = element.gauss_points()
@@ -60,10 +64,33 @@ class VTKVisualizer:
             u_e, d_e = u[nodes], d[nodes]
             coords = np.column_stack((self.x[nodes], self.y[nodes]))
             
-            # Compute stress at element center
+            # Current/deformed coordinates
+            coords_current = coords + u_e
+            
+            # Calculate areas using the cross product method for triangles
+            # Reference area
+            v1_ref = coords[1] - coords[0]
+            v2_ref = coords[2] - coords[0]
+            area_ref = 0.5 * abs(np.cross(v1_ref, v2_ref))
+            element_areas_reference[e] = area_ref
+            
+            # Current area (deformed configuration)
+            v1_curr = coords_current[1] - coords_current[0]
+            v2_curr = coords_current[2] - coords_current[0]
+            area_curr = 0.5 * abs(np.cross(v1_curr, v2_curr))
+            element_areas_current[e] = area_curr
+            area_ratio = area_curr / area_ref
+            
+            # Alternative: Calculate area using Jacobian determinant
+            # This gives you the area at the element center
             xi_center, eta_center = 1/3, 1/3
             N, _, _ = element.shape_functions(xi_center, eta_center)
-            detJ, dN_dx, dN_dy = element.compute_jacobian(coords, xi_center, eta_center)
+            detJ_ref, dN_dx, dN_dy = element.compute_jacobian(coords, xi_center, eta_center)
+            detJ_curr, _, _ = element.compute_jacobian(coords_current, xi_center, eta_center)
+            
+            # Area using Jacobian (should match the cross product method)
+            # area_ref_jac = abs(detJ_ref) * 0.5  # For reference triangle
+            # area_curr_jac = abs(detJ_curr) * 0.5  # For current triangle
             
             # Strain-displacement matrix
             B = element.strain_displacement_matrix(dN_dx, dN_dy)
@@ -75,7 +102,7 @@ class VTKVisualizer:
             d_center = np.dot(N, d_e)
             
             # Compute stress
-            stress = film_material.compute_stress(strain, d_center)
+            stress = film_material.compute_stress(strain, d_center)/ area_ratio
             
             # Distribute to nodes (simple averaging)
             for i, node in enumerate(nodes):
@@ -86,6 +113,15 @@ class VTKVisualizer:
         for i in range(self.n_nodes):
             if node_count[i] > 0:
                 stress_field[i] /= node_count[i]
+        
+        # Calculate total surface areas
+        total_area_reference = np.sum(element_areas_reference)
+        total_area_current = np.sum(element_areas_current)
+        area_change_ratio = total_area_current / total_area_reference
+        
+        print(f"Total reference area: {total_area_reference:.6f}")
+        print(f"Total current area: {total_area_current:.6f}")
+        print(f"Area change ratio: {area_change_ratio:.6f}")
         
         return stress_field
     

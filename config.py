@@ -9,18 +9,24 @@ class SimulationConfig:
     """Configuration class for simulation parameters."""
     
     # Mesh parameters
-    RADIUS = 5
+    RADIUS = 200
     MESH_RESOLUTION = 0.03
     
     # Material properties
     E_FILM = 1.0
-    E_SUBSTRATE = 1.
+    E_SUBSTRATE = 0.0637
     NU_FILM = 0.3
     NU_SUBSTRATE = 0.3
+    HF=0.25
+    HS=25
+    CHI=769
+    GC=1
+    AT1=1
+    AT2=2
     
     # Pha   se-field parameters
-    LENGTH_SCALE = .2
-    COUPLING_PARAMETER = .75
+    LENGTH_SCALE = 3.
+    COUPLING_PARAMETER = 0.75
     SUBSTRATE_STIFFNESS = 1
     PSI_C_AT1 = 0.5
     PSI_C_AT2 = 0.0
