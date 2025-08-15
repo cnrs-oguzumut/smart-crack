@@ -17,6 +17,7 @@ from boundary_conditions import RadialBoundaryConditions, DamageBoundaryConditio
 from visualization import SimulationVisualizer
 from state_manager import SimulationStateManager
 from film_stress_calculator import FilmStressCalculator
+from mesh_generator import  VoronoiGrainGenerator
 
 try:
     from vtk_visualizer import VTKVisualizer
@@ -96,8 +97,23 @@ class AT1_2D_ActiveSet_Solver:
     def _setup_mesh(self, resolution):
         """Setup circular mesh using mesh generator."""
         mesh_gen = CircularMeshGenerator(self.radius, resolution)
-        (self.x, self.y, self.connectivity, self.boundary_nodes, 
-         self.n_nodes, self.n_elem) = mesh_gen.generate_mesh()
+        (self.x, self.y, self.connectivity, self.boundary_nodes,
+        self.n_nodes, self.n_elem) = mesh_gen.generate_mesh()
+        
+        # Create grain structure
+        grain_gen = VoronoiGrainGenerator(n_grains=15, seed=42)
+        element_grain_ids, grain_seeds, self.element_orientations = grain_gen.generate_grains(
+            self.x, self.y, self.connectivity  # ← Use self.connectivity instead of triangles
+        )
+        
+        # Store grain information
+        self.element_grain_ids = element_grain_ids
+        self.grain_seeds = grain_seeds
+        
+        # Visualize the grains
+        grain_gen.plot_grain_structure(
+            self.x, self.y, self.connectivity  # ← Use self.x, self.y, self.connectivity
+        )
     
     def _setup_materials(self):
         """Setup material models."""
@@ -400,6 +416,9 @@ class AT1_2D_ActiveSet_Solver:
             u_e, d_e = u[nodes], d[nodes]
             coords = np.column_stack((self.x[nodes], self.y[nodes]))
             R_ed = np.zeros(3)
+            angle = self.element_orientations[e] 
+            D_element_film = self.film_material._compute_stiffness_matrix_crystal(angle)
+
             
             for gp in range(len(xi_gp)):
                 N, _, _ = element.shape_functions(xi_gp[gp], eta_gp[gp])
@@ -412,7 +431,7 @@ class AT1_2D_ActiveSet_Solver:
                 strain = self.energy_calc.compute_strain_from_displacement(u_e, B)
 
                 elastic_energy_density = self.energy_calc.compute_positive_energy(
-                    strain, self.film_material.D
+                    strain, D_element_film
                 )
                 psi_pos = elastic_energy_density
                 
@@ -477,6 +496,7 @@ class AT1_2D_ActiveSet_Solver:
             u_e, v_e, d_e = u[nodes], v[nodes], self.d[nodes]
             coords = np.column_stack((self.x[nodes], self.y[nodes]))
             R_eu, R_ev = np.zeros((3, 2)), np.zeros((3, 2))
+            angle = self.element_orientations[e]  # Get angle for this element
 
             for gp in range(len(xi_gp)):
                 N, _, _ = element.shape_functions(xi_gp[gp], eta_gp[gp])
@@ -495,7 +515,7 @@ class AT1_2D_ActiveSet_Solver:
                 strain_v = self.energy_calc.compute_strain_from_displacement(v_e, B)
                 
                 # Stresses
-                stress_u = self.film_material.compute_stress(strain_u, d_gp)
+                stress_u = self.film_material.compute_stress(strain_u, d_gp,angle)
                 stress_v = self.substrate_material.compute_stress(strain_v)
                 
                 # Collect strains, stresses, and volumes (once per element)
@@ -577,7 +597,8 @@ class AT1_2D_ActiveSet_Solver:
             nodes = self.connectivity[e]
             d_e = self.d[nodes]
             coords = np.column_stack((self.x[nodes], self.y[nodes]))
-            
+            angle = self.element_orientations[e] 
+
             K_uu = np.zeros((6, 6))  # Film-film coupling
             K_uv = np.zeros((6, 6))  # Film-substrate coupling
             K_vu = np.zeros((6, 6))  # Substrate-film coupling
@@ -594,7 +615,8 @@ class AT1_2D_ActiveSet_Solver:
                 B = element.strain_displacement_matrix(dN_dx, dN_dy)
                 
                 # Stiffness contributions
-                K_film = g_d * np.dot(B.T, np.dot(self.film_material.D, B)) * detJ * w_gp[gp]
+                D_element = self.film_material._compute_stiffness_matrix_crystal(angle)
+                K_film = g_d * np.dot(B.T, np.dot(D_element, B)) * detJ * w_gp[gp]
                 K_substrate = np.dot(B.T, np.dot(self.substrate_material.D, B)) * detJ * w_gp[gp]
                 
                 # Coupling stiffness
@@ -678,12 +700,16 @@ class AT1_2D_ActiveSet_Solver:
         """Assemble the physical damage Jacobian matrix."""
         element = TriangularElement()
         xi_gp, eta_gp, w_gp = element.gauss_points()
+
         
         for e in range(self.n_elem):
             nodes = self.connectivity[e]
             u_e, d_e = self.u[nodes], d[nodes]
             coords = np.column_stack((self.x[nodes], self.y[nodes]))
             K_dd = np.zeros((3, 3))
+            angle = self.element_orientations[e] 
+            D_element_film = self.film_material._compute_stiffness_matrix_crystal(angle)
+
             
             for gp in range(len(xi_gp)):
                 N, _, _ = element.shape_functions(xi_gp[gp], eta_gp[gp])
@@ -693,7 +719,7 @@ class AT1_2D_ActiveSet_Solver:
                 B = element.strain_displacement_matrix(dN_dx, dN_dy)
                 strain = self.energy_calc.compute_strain_from_displacement(u_e, B)
                 elastic_energy_density = self.energy_calc.compute_positive_energy(
-                    strain, self.film_material.D
+                    strain, D_element_film
                 )
                 psi_pos = elastic_energy_density
                 

@@ -119,7 +119,7 @@ def setup_simulation_config():
         print("   📋 Standard mode selected")
     
     # Additional options
-    config.USE_VI_SOLVER = input(f"Use VI solver? (y/N) [{config.USE_VI_SOLVER}]: ").strip().lower() == 'y'
+    config.USE_VI_SOLVER = input(f"Use VI solver? (Y/n) [{config.USE_VI_SOLVER}]: ").strip().lower() not in ['n', 'no']
     config.IRREVERSIBILITY_THRESHOLD = 0.0  # Keep strict irreversibility
     
     return config

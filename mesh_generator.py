@@ -327,7 +327,7 @@ class ProfessionalRectangularMeshGenerator:
         
         # Map to rectangular domain
         self.width = 1.*radius
-        self.height = .35*radius
+        self.height = .75*radius
         self.x_min, self.x_max = -self.width/2, self.width/2
         self.y_min, self.y_max = -self.height/2, self.height/2
         
@@ -743,6 +743,186 @@ class CircularMeshGenerator:
             print("✅ Saved mesh plot: simple_circular_mesh.png")
         
         plt.show()
+
+
+class VoronoiGrainGenerator:
+    """Generate Voronoi grain structure for existing mesh."""
+    
+    def __init__(self, n_grains=10, seed=42):
+        """
+        Initialize grain generator.
+        
+        Parameters:
+        -----------
+        n_grains : int
+            Number of grain seeds to generate
+        seed : int
+            Random seed for reproducibility
+        """
+        self.n_grains = n_grains
+        self.seed = seed
+        self.grain_seeds = None
+        self.element_grain_ids = None
+        
+    def generate_grains(self, x_coords, y_coords, triangles):
+        """
+        Generate Voronoi grain structure for given mesh.
+        
+        Parameters:
+        -----------
+        x_coords : array
+            Node x-coordinates
+        y_coords : array  
+            Node y-coordinates
+        triangles : array
+            Element connectivity (n_elem x 3)
+            
+        Returns:
+        --------
+        element_grain_ids : array
+            Grain ID for each element
+        grain_seeds : array
+            Grain seed coordinates (n_grains x 2)
+        element_angles : array
+            Crystal orientation angle in degrees for each element
+        """
+        
+        print(f"🔬 Generating {self.n_grains} Voronoi grains...")
+        
+        # Set random seed for reproducibility
+        np.random.seed(self.seed)
+        
+        # Get domain bounds from mesh
+        x_min, x_max = np.min(x_coords), np.max(x_coords)
+        y_min, y_max = np.min(y_coords), np.max(y_coords)
+        width = x_max - x_min
+        height = y_max - y_min
+        
+        print(f"   Domain: {width:.1f} x {height:.1f}")
+        
+        # Generate grain seeds within domain
+        seed_x = np.random.uniform(x_min, x_max, self.n_grains)
+        seed_y = np.random.uniform(y_min, y_max, self.n_grains)
+        self.grain_seeds = np.column_stack((seed_x, seed_y))
+        
+        # Generate random crystal orientations for each grain (0-90 degrees)
+        self.grain_orientations = np.random.uniform(0, 90, self.n_grains)
+        
+        # Add boundary seeds for better grain shapes at edges
+        margin = max(width, height) * 0.2
+        n_boundary = self.n_grains // 3
+        
+        boundary_x = np.random.uniform(x_min - margin, x_max + margin, n_boundary)
+        boundary_y = np.random.uniform(y_min - margin, y_max + margin, n_boundary)
+        boundary_seeds = np.column_stack((boundary_x, boundary_y))
+        
+        # Combine interior and boundary seeds
+        all_seeds = np.vstack((self.grain_seeds, boundary_seeds))
+        
+        print(f"   Total seeds: {len(all_seeds)} ({self.n_grains} interior + {n_boundary} boundary)")
+        
+        # Assign each element to nearest grain (Voronoi assignment)
+        vertices = np.column_stack((x_coords, y_coords))
+        n_elements = len(triangles)
+        self.element_grain_ids = np.zeros(n_elements, dtype=int)
+        self.element_angles = np.zeros(n_elements)  # Store angles for each element
+        
+        print("   Computing element-grain assignments...")
+        
+        for elem_id, triangle in enumerate(triangles):
+            # Get element centroid
+            element_nodes = vertices[triangle]
+            centroid = np.mean(element_nodes, axis=0)
+            
+            # Find nearest grain seed (only consider interior seeds for assignment)
+            distances = np.linalg.norm(self.grain_seeds - centroid, axis=1)
+            nearest_grain = np.argmin(distances)
+            
+            # Assign grain ID and crystal orientation
+            self.element_grain_ids[elem_id] = nearest_grain
+            self.element_angles[elem_id] = self.grain_orientations[nearest_grain]
+        
+        # Verify all grains are used
+        used_grains = np.unique(self.element_grain_ids)
+        print(f"   ✅ Generated {len(used_grains)} grains covering {n_elements} elements")
+        print(f"   🔄 Crystal orientations: {np.min(self.grain_orientations):.1f}° to {np.max(self.grain_orientations):.1f}°")
+        
+        return self.element_grain_ids, self.grain_seeds, self.element_angles    
+    def get_grain_info(self):
+        """Return grain structure information."""
+        if self.element_grain_ids is None:
+            return None
+            
+        n_grains_used = len(np.unique(self.element_grain_ids))
+        elements_per_grain = len(self.element_grain_ids) / n_grains_used
+        
+        return {
+            'n_grains_generated': self.n_grains,
+            'n_grains_used': n_grains_used,
+            'elements_per_grain': elements_per_grain,
+            'total_elements': len(self.element_grain_ids)
+        }
+    
+    def plot_grain_structure(self, x_coords, y_coords, triangles, save_fig=True):
+        """Visualize the generated grain structure."""
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as patches
+        
+        if self.element_grain_ids is None:
+            print("No grain structure generated yet!")
+            return
+            
+        fig, ax = plt.subplots(1, 1, figsize=(12, 8))
+        
+        vertices = np.column_stack((x_coords, y_coords))
+        
+        # Plot each element colored by grain ID
+        for elem_id, triangle in enumerate(triangles):
+            element_nodes = vertices[triangle]
+            grain_id = self.element_grain_ids[elem_id]
+            
+            # Color by grain ID
+            color = plt.cm.tab20(grain_id % 20)
+            triangle_patch = patches.Polygon(element_nodes, 
+                                           facecolor=color, 
+                                           edgecolor='black', 
+                                           linewidth=0.05, 
+                                           alpha=0.8)
+            ax.add_patch(triangle_patch)
+        
+        # Plot grain seeds
+        ax.scatter(self.grain_seeds[:, 0], self.grain_seeds[:, 1], 
+                  c='red', s=100, marker='x', linewidths=3, 
+                  label='Grain Seeds', zorder=10)
+        
+        # Add grain numbers
+        for i, seed in enumerate(self.grain_seeds):
+            ax.annotate(f'{i}', (seed[0], seed[1]), 
+                       xytext=(5, 5), textcoords='offset points',
+                       fontsize=8, fontweight='bold', color='white',
+                       bbox=dict(boxstyle='round,pad=0.2', facecolor='black', alpha=0.7))
+        
+        ax.set_xlim(np.min(x_coords), np.max(x_coords))
+        ax.set_ylim(np.min(y_coords), np.max(y_coords))
+        ax.set_aspect('equal')
+        ax.set_title(f'Voronoi Grain Structure ({self.n_grains} grains)')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        
+        if save_fig:
+            plt.savefig('voronoi_grains.png', dpi=300, bbox_inches='tight')
+            print("   💾 Grain structure saved to 'voronoi_grains.png'")
+        
+        #plt.show()
+        
+        # Print statistics
+        info = self.get_grain_info()
+        if info:
+            print(f"\n📊 Grain Statistics:")
+            print(f"   Grains generated: {info['n_grains_generated']}")
+            print(f"   Grains used: {info['n_grains_used']}")
+            print(f"   Elements per grain: {info['elements_per_grain']:.1f}")
+            print(f"   Total elements: {info['total_elements']}")
 
 
 # Example usage and testing
