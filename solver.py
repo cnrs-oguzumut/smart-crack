@@ -102,14 +102,13 @@ class AT1_2D_ActiveSet_Solver:
         
         # Create grain structure
         grain_gen = VoronoiGrainGenerator(n_grains=15, seed=42)
-        element_grain_ids, grain_seeds, self.element_orientations = grain_gen.generate_grains(
-            self.x, self.y, self.connectivity  # ← Use self.connectivity instead of triangles
+        element_grain_ids, grain_seeds, self.element_orientations, self.grain_boundary_flags = grain_gen.generate_grains(
+            self.x, self.y, self.connectivity
         )
-        
+
         # Store grain information
         self.element_grain_ids = element_grain_ids
-        self.grain_seeds = grain_seeds
-        
+        self.grain_seeds = grain_seeds        
         # Visualize the grains
         grain_gen.plot_grain_structure(
             self.x, self.y, self.connectivity  # ← Use self.x, self.y, self.connectivity
@@ -417,6 +416,7 @@ class AT1_2D_ActiveSet_Solver:
             coords = np.column_stack((self.x[nodes], self.y[nodes]))
             R_ed = np.zeros(3)
             angle = self.element_orientations[e] 
+            is_grain_boundary = self.grain_boundary_flags[e]  # 1 = boundary, 0 = interior
             D_element_film = self.film_material._compute_stiffness_matrix_crystal(angle)
 
             
@@ -444,10 +444,17 @@ class AT1_2D_ActiveSet_Solver:
                 # GC = 8/15
                 # GC=  0.25
                 # Regularization term
+                
                 regularization = self.hf*(3./8.)*w_prime* N/self.l
                 
                 # Gradient term
                 gradient_term = self.hf*(3./8.)*self.l* (d_grad[0] * dN_dx + d_grad[1] * dN_dy)
+                if is_grain_boundary:
+                    regularization *= 0.5
+                    gradient_term  *= 0.5
+                    
+                    
+                    
                 
                 # Driving force term
                 driving_term = -self.hf*self.damage_model.compute_driving_force(psi_pos, d_gp) * N
@@ -708,6 +715,8 @@ class AT1_2D_ActiveSet_Solver:
             coords = np.column_stack((self.x[nodes], self.y[nodes]))
             K_dd = np.zeros((3, 3))
             angle = self.element_orientations[e] 
+            is_grain_boundary = self.grain_boundary_flags[e]  # 1 = boundary, 0 = interior
+
             D_element_film = self.film_material._compute_stiffness_matrix_crystal(angle)
 
             
@@ -733,10 +742,15 @@ class AT1_2D_ActiveSet_Solver:
                 # GC=8/15
                 # GC=0.25
                 # Gradient contribution
-                gradient_contrib = self.Gc*self.hf*(3./8.)*self.l*(np.outer(dN_dx, dN_dx) + np.outer(dN_dy, dN_dy))
-                
+                gradient_contrib = self.hf*(3./8.)*self.l*(np.outer(dN_dx, dN_dx) + np.outer(dN_dy, dN_dy))
+                if is_grain_boundary:
+                    regularization_contrib*=0.5
+                    gradient_contrib*=0.5
+                    
+                    
+
                 # Driving force contribution
-                driving_contrib = self.Gc*self.hf*2.0 * psi_pos * np.outer(N, N)
+                driving_contrib = self.hf*2.0 * psi_pos * np.outer(N, N)
                 
                 K_dd += (regularization_contrib + gradient_contrib + driving_contrib) * detJ * w_gp[gp]
             

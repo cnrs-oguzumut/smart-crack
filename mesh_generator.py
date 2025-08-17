@@ -327,7 +327,7 @@ class ProfessionalRectangularMeshGenerator:
         
         # Map to rectangular domain
         self.width = 1.*radius
-        self.height = .75*radius
+        self.height = .5*radius
         self.x_min, self.x_max = -self.width/2, self.width/2
         self.y_min, self.y_max = -self.height/2, self.height/2
         
@@ -763,6 +763,7 @@ class VoronoiGrainGenerator:
         self.seed = seed
         self.grain_seeds = None
         self.element_grain_ids = None
+        self.node_grain_ids = None  # Track grain assignment for each node
         
     def generate_grains(self, x_coords, y_coords, triangles):
         """
@@ -785,6 +786,8 @@ class VoronoiGrainGenerator:
             Grain seed coordinates (n_grains x 2)
         element_angles : array
             Crystal orientation angle in degrees for each element
+        grain_boundary_flags : array
+            Flag indicating grain boundary elements (1 = boundary, 0 = interior)
         """
         
         print(f"🔬 Generating {self.n_grains} Voronoi grains...")
@@ -821,33 +824,82 @@ class VoronoiGrainGenerator:
         
         print(f"   Total seeds: {len(all_seeds)} ({self.n_grains} interior + {n_boundary} boundary)")
         
-        # Assign each element to nearest grain (Voronoi assignment)
+        # First assign grain IDs to nodes based on Voronoi assignment
         vertices = np.column_stack((x_coords, y_coords))
+        n_nodes = len(vertices)
         n_elements = len(triangles)
-        self.element_grain_ids = np.zeros(n_elements, dtype=int)
-        self.element_angles = np.zeros(n_elements)  # Store angles for each element
         
-        print("   Computing element-grain assignments...")
+        print("   Computing node-grain assignments...")
+        self.node_grain_ids = np.zeros(n_nodes, dtype=int)
+        
+        for node_id, node_pos in enumerate(vertices):
+            # Find nearest grain seed (only consider interior seeds for assignment)
+            distances = np.linalg.norm(self.grain_seeds - node_pos, axis=1)
+            nearest_grain = np.argmin(distances)
+            self.node_grain_ids[node_id] = nearest_grain
+        
+        # Now assign element grain IDs and detect grain boundaries
+        self.element_grain_ids = np.zeros(n_elements, dtype=int)
+        self.element_angles = np.zeros(n_elements)
+        self.grain_boundary_flags = np.zeros(n_elements, dtype=int)
+        
+        print("   Computing element-grain assignments and grain boundaries...")
+        
+        n_boundary_elements = 0
         
         for elem_id, triangle in enumerate(triangles):
-            # Get element centroid
-            element_nodes = vertices[triangle]
-            centroid = np.mean(element_nodes, axis=0)
+            # Get grain IDs of the three nodes of this element
+            node_grains = self.node_grain_ids[triangle]
             
-            # Find nearest grain seed (only consider interior seeds for assignment)
-            distances = np.linalg.norm(self.grain_seeds - centroid, axis=1)
-            nearest_grain = np.argmin(distances)
+            # Check if all nodes belong to the same grain
+            unique_grains = np.unique(node_grains)
             
-            # Assign grain ID and crystal orientation
-            self.element_grain_ids[elem_id] = nearest_grain
-            self.element_angles[elem_id] = self.grain_orientations[nearest_grain]
+            if len(unique_grains) == 1:
+                # All nodes belong to same grain - interior element
+                grain_id = unique_grains[0]
+                self.element_grain_ids[elem_id] = grain_id
+                self.element_angles[elem_id] = self.grain_orientations[grain_id]
+                self.grain_boundary_flags[elem_id] = 0
+            else:
+                # Nodes belong to multiple grains - grain boundary element
+                n_boundary_elements += 1
+                
+                # Assign to the most frequent grain among nodes
+                grain_counts = np.bincount(node_grains, minlength=self.n_grains)
+                dominant_grain = np.argmax(grain_counts)
+                
+                self.element_grain_ids[elem_id] = dominant_grain
+                
+                # For grain boundary elements, calculate angle based on misorientation
+                # between the grains involved
+                if len(unique_grains) == 2:
+                    # Simple case: boundary between two grains
+                    grain1, grain2 = unique_grains[0], unique_grains[1]
+                    angle1 = self.grain_orientations[grain1]
+                    angle2 = self.grain_orientations[grain2]
+                    
+                    # Calculate misorientation angle (smallest angle between orientations)
+                    misorientation = abs(angle1 - angle2)
+                    misorientation = min(misorientation, 180 - misorientation)
+                    
+                    self.element_angles[elem_id] = misorientation
+                else:
+                    # Triple junction or more complex case
+                    # Use average of all involved grain orientations
+                    involved_orientations = self.grain_orientations[unique_grains]
+                    self.element_angles[elem_id] = np.mean(involved_orientations)
+                
+                # Flag as grain boundary
+                self.grain_boundary_flags[elem_id] = 1
         
         # Verify all grains are used
         used_grains = np.unique(self.element_grain_ids)
         print(f"   ✅ Generated {len(used_grains)} grains covering {n_elements} elements")
         print(f"   🔄 Crystal orientations: {np.min(self.grain_orientations):.1f}° to {np.max(self.grain_orientations):.1f}°")
+        print(f"   🎯 Grain boundary elements: {n_boundary_elements} ({n_boundary_elements/n_elements*100:.1f}%)")
         
-        return self.element_grain_ids, self.grain_seeds, self.element_angles    
+        return self.element_grain_ids, self.grain_seeds, self.element_angles, self.grain_boundary_flags
+    
     def get_grain_info(self):
         """Return grain structure information."""
         if self.element_grain_ids is None:
@@ -855,15 +907,18 @@ class VoronoiGrainGenerator:
             
         n_grains_used = len(np.unique(self.element_grain_ids))
         elements_per_grain = len(self.element_grain_ids) / n_grains_used
+        n_boundary_elements = np.sum(self.grain_boundary_flags) if self.grain_boundary_flags is not None else 0
         
         return {
             'n_grains_generated': self.n_grains,
             'n_grains_used': n_grains_used,
             'elements_per_grain': elements_per_grain,
-            'total_elements': len(self.element_grain_ids)
+            'total_elements': len(self.element_grain_ids),
+            'boundary_elements': n_boundary_elements,
+            'boundary_percentage': n_boundary_elements / len(self.element_grain_ids) * 100
         }
     
-    def plot_grain_structure(self, x_coords, y_coords, triangles, save_fig=True):
+    def plot_grain_structure(self, x_coords, y_coords, triangles, save_fig=True, show_boundaries=True):
         """Visualize the generated grain structure."""
         import matplotlib.pyplot as plt
         import matplotlib.patches as patches
@@ -872,11 +927,14 @@ class VoronoiGrainGenerator:
             print("No grain structure generated yet!")
             return
             
-        fig, ax = plt.subplots(1, 1, figsize=(12, 8))
+        if show_boundaries and self.grain_boundary_flags is not None:
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 8))
+        else:
+            fig, ax1 = plt.subplots(1, 1, figsize=(12, 8))
         
         vertices = np.column_stack((x_coords, y_coords))
         
-        # Plot each element colored by grain ID
+        # Plot 1: Grain structure
         for elem_id, triangle in enumerate(triangles):
             element_nodes = vertices[triangle]
             grain_id = self.element_grain_ids[elem_id]
@@ -888,30 +946,60 @@ class VoronoiGrainGenerator:
                                            edgecolor='black', 
                                            linewidth=0.05, 
                                            alpha=0.8)
-            ax.add_patch(triangle_patch)
+            ax1.add_patch(triangle_patch)
         
         # Plot grain seeds
-        ax.scatter(self.grain_seeds[:, 0], self.grain_seeds[:, 1], 
+        ax1.scatter(self.grain_seeds[:, 0], self.grain_seeds[:, 1], 
                   c='red', s=100, marker='x', linewidths=3, 
                   label='Grain Seeds', zorder=10)
         
         # Add grain numbers
         for i, seed in enumerate(self.grain_seeds):
-            ax.annotate(f'{i}', (seed[0], seed[1]), 
+            ax1.annotate(f'{i}', (seed[0], seed[1]), 
                        xytext=(5, 5), textcoords='offset points',
                        fontsize=8, fontweight='bold', color='white',
                        bbox=dict(boxstyle='round,pad=0.2', facecolor='black', alpha=0.7))
         
-        ax.set_xlim(np.min(x_coords), np.max(x_coords))
-        ax.set_ylim(np.min(y_coords), np.max(y_coords))
-        ax.set_aspect('equal')
-        ax.set_title(f'Voronoi Grain Structure ({self.n_grains} grains)')
-        ax.legend()
-        ax.grid(True, alpha=0.3)
+        ax1.set_xlim(np.min(x_coords), np.max(x_coords))
+        ax1.set_ylim(np.min(y_coords), np.max(y_coords))
+        ax1.set_aspect('equal')
+        ax1.set_title(f'Voronoi Grain Structure ({self.n_grains} grains)')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+        
+        # Plot 2: Grain boundaries (if requested and available)
+        if show_boundaries and self.grain_boundary_flags is not None:
+            for elem_id, triangle in enumerate(triangles):
+                element_nodes = vertices[triangle]
+                is_boundary = self.grain_boundary_flags[elem_id]
+                
+                if is_boundary:
+                    # Grain boundary elements in red
+                    color = 'red'
+                    alpha = 0.8
+                    linewidth = 0.2
+                else:
+                    # Interior elements in light gray
+                    color = 'lightgray'
+                    alpha = 0.5
+                    linewidth = 0.05
+                
+                triangle_patch = patches.Polygon(element_nodes, 
+                                               facecolor=color, 
+                                               edgecolor='black', 
+                                               linewidth=linewidth, 
+                                               alpha=alpha)
+                ax2.add_patch(triangle_patch)
+            
+            ax2.set_xlim(np.min(x_coords), np.max(x_coords))
+            ax2.set_ylim(np.min(y_coords), np.max(y_coords))
+            ax2.set_aspect('equal')
+            ax2.set_title(f'Grain Boundaries (Red = Boundary Elements)')
+            ax2.grid(True, alpha=0.3)
         
         if save_fig:
-            plt.savefig('voronoi_grains.png', dpi=300, bbox_inches='tight')
-            print("   💾 Grain structure saved to 'voronoi_grains.png'")
+            plt.savefig('voronoi_grains_with_boundaries.png', dpi=300, bbox_inches='tight')
+            print("   💾 Grain structure saved to 'voronoi_grains_with_boundaries.png'")
         
         #plt.show()
         
@@ -923,43 +1011,60 @@ class VoronoiGrainGenerator:
             print(f"   Grains used: {info['n_grains_used']}")
             print(f"   Elements per grain: {info['elements_per_grain']:.1f}")
             print(f"   Total elements: {info['total_elements']}")
+            print(f"   Boundary elements: {info['boundary_elements']} ({info['boundary_percentage']:.1f}%)")
+    
+    def get_grain_boundary_elements(self):
+        """Return indices of elements that are on grain boundaries."""
+        if self.grain_boundary_flags is None:
+            return None
+        return np.where(self.grain_boundary_flags == 1)[0]
+    
+    def get_misorientation_stats(self):
+        """Return statistics about grain boundary misorientations."""
+        if self.grain_boundary_flags is None or self.element_angles is None:
+            return None
+            
+        boundary_elements = self.grain_boundary_flags == 1
+        boundary_angles = self.element_angles[boundary_elements]
+        
+        if len(boundary_angles) == 0:
+            return None
+            
+        return {
+            'mean_misorientation': np.mean(boundary_angles),
+            'std_misorientation': np.std(boundary_angles),
+            'min_misorientation': np.min(boundary_angles),
+            'max_misorientation': np.max(boundary_angles),
+            'n_boundary_elements': len(boundary_angles)
+        }
 
 
 # Example usage and testing
 if __name__ == "__main__":
-    print("=== TESTING TRIANGLE-BASED MESH GENERATORS ===")
+    print("=== TESTING ENHANCED VORONOI GRAIN GENERATOR ===")
     
-    # Test circular mesh
-    print("\n=== Professional Circular Mesh (Triangle) ===")
-    try:
-        circular_gen = ProfessionalCircularMeshGenerator(radius=1.0, target_edge_length=0.08)
-        x, y, conn, boundary, n_nodes, n_elem = circular_gen.generate_mesh()
-        circular_gen.plot_mesh(x, y, conn, boundary)
-    except Exception as e:
-        print(f"Circular mesh error: {e}")
+    # This would need the mesh generators from your original code
+    # For demonstration, showing how to use the enhanced functionality:
     
-    # Test rectangular mesh
-    print("\n=== Professional Rectangular Mesh (Triangle) ===")
-    try:
-        rect_gen = ProfessionalRectangularMeshGenerator(radius=1.0, target_edge_length=0.08)
-        x, y, conn, boundary, n_nodes, n_elem = rect_gen.generate_mesh()
-        rect_gen.plot_mesh(x, y, conn, boundary)
-    except Exception as e:
-        print(f"Rectangular mesh error: {e}")
+    """
+    # Generate a mesh first (using your existing mesh generators)
+    circular_gen = ProfessionalCircularMeshGenerator(radius=1.0, target_edge_length=0.08)
+    x, y, conn, boundary, n_nodes, n_elem = circular_gen.generate_mesh()
     
-    # Test simple fallback
-    print("\n=== Simple Circular Mesh (Fallback) ===")
-    try:
-        simple_gen = CircularMeshGenerator(radius=1.0, resolution=0.08)
-        x, y, conn, boundary, n_nodes, n_elem = simple_gen.generate_mesh()
-        simple_gen.plot_mesh(x, y, conn, boundary)
-    except Exception as e:
-        print(f"Simple mesh error: {e}")
+    # Generate grains with boundary detection
+    grain_gen = VoronoiGrainGenerator(n_grains=15, seed=42)
+    element_grains, grain_seeds, element_angles, boundary_flags = grain_gen.generate_grains(x, y, conn)
     
-    print("\n=== INSTALLATION INSTRUCTIONS ===")
-    print("For best results, install Triangle:")
-    print("pip install triangle")
-    print("\nAlternative mesh libraries:")
-    print("pip install gmsh")
-    print("pip install pygmsh")
-    print("pip install dmsh")
+    # Plot results showing both grains and boundaries
+    grain_gen.plot_grain_structure(x, y, conn, show_boundaries=True)
+    
+    # Get boundary element statistics
+    boundary_elements = grain_gen.get_grain_boundary_elements()
+    print(f"Boundary element indices: {boundary_elements}")
+    
+    # Get misorientation statistics
+    misorientation_stats = grain_gen.get_misorientation_stats()
+    if misorientation_stats:
+        print(f"Average misorientation: {misorientation_stats['mean_misorientation']:.2f}°")
+        print(f"Misorientation range: {misorientation_stats['min_misorientation']:.2f}° - {misorientation_stats['max_misorientation']:.2f}°")
+    """

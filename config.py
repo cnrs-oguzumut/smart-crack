@@ -9,7 +9,7 @@ class SimulationConfig:
     """Configuration class for simulation parameters."""
     
     # Mesh parameters
-    RADIUS = 250
+    RADIUS = 100
     
     
     # Material properties
@@ -25,8 +25,8 @@ class SimulationConfig:
     AT2=2.
     
     # Pha   se-field parameters
-    LENGTH_SCALE = 4.
-    MESH_RESOLUTION = LENGTH_SCALE/4
+    LENGTH_SCALE = 3.
+    MESH_RESOLUTION = LENGTH_SCALE/3
     COUPLING_PARAMETER = 1.75
     SUBSTRATE_STIFFNESS = 1
     PSI_C_AT1 = 0.5
@@ -36,15 +36,15 @@ class SimulationConfig:
     MAX_NEWTON_ITER = 1000
     NEWTON_RTOL = 1e-5
     NEWTON_ATOL = 1e-5
-    MAX_ALT_ITER = 200
+    MAX_ALT_ITER = 500
     ALT_TOL = 1e-5
     
     # Simulation parameters
     N_STEPS = 150
-    MAX_DISPLACEMENT = 2.
+    MAX_DISPLACEMENT = .5
     PLOT_FREQUENCY = 1
     LOADING_MODE = "biaxial"
-    BIAXIALITY_RATIO=1.
+    BIAXIALITY_RATIO=.95
 
     
     # Irreversibility
