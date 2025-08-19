@@ -53,7 +53,8 @@ class RadialBoundaryConditions:
         """Set applied displacement and convert to strain for deformation gradient."""
         if self.domain_type == 'rectangular':
             domain_size = max(np.max(self.x) - np.min(self.x), np.max(self.y) - np.min(self.y))
-            self.applied_strain = displacement / domain_size if domain_size > 0 else displacement
+            #self.applied_strain = displacement / domain_size if domain_size > 0 else displacement
+            self.applied_strain = displacement #/ domain_size if domain_size > 0 else displacement
         else:
             self.applied_strain = displacement
         

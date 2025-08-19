@@ -81,6 +81,8 @@ class SimulationVisualizer:
                 residual_min = np.min(gp_residuals)
                 residual_max = np.max(gp_residuals)
                 residual_abs_max = np.max(np.abs(gp_residuals))
+                damage_residual = np.maximum(damage_residual, 0)
+
                 
                 print(f"Damage residual (Gauss pts): min={residual_min:.2e}, max={residual_max:.2e}")
                 

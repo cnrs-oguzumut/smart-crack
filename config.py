@@ -9,7 +9,7 @@ class SimulationConfig:
     """Configuration class for simulation parameters."""
     
     # Mesh parameters
-    RADIUS = 100
+    RADIUS = 150
     
     
     # Material properties
@@ -40,8 +40,8 @@ class SimulationConfig:
     ALT_TOL = 1e-5
     
     # Simulation parameters
-    N_STEPS = 150
-    MAX_DISPLACEMENT = .5
+    N_STEPS = 100
+    MAX_DISPLACEMENT = 3.
     PLOT_FREQUENCY = 1
     LOADING_MODE = "biaxial"
     BIAXIALITY_RATIO=.95

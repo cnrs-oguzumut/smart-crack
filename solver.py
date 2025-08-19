@@ -8,6 +8,7 @@ import time
 import warnings
 from config import SimulationConfig, PETSC_AVAILABLE
 from mesh_generator import ProfessionalRectangularMeshGenerator as  CircularMeshGenerator
+from mesh_generator import GcDistribution
 #from mesh_generator import ProfessionalCircularMeshGenerator as  CircularMeshGenerator
 
 from material_models import FilmMaterial, SubstrateMaterial, DamageModel, ElasticEnergyCalculator
@@ -101,10 +102,81 @@ class AT1_2D_ActiveSet_Solver:
         self.n_nodes, self.n_elem) = mesh_gen.generate_mesh()
         
         # Create grain structure
-        grain_gen = VoronoiGrainGenerator(n_grains=15, seed=42)
+        grain_gen = VoronoiGrainGenerator(n_grains=25, seed=24)
         element_grain_ids, grain_seeds, self.element_orientations, self.grain_boundary_flags = grain_gen.generate_grains(
             self.x, self.y, self.connectivity
         )
+
+
+        # Set up FRACTAL noise WITHOUT microstructure effects
+        gc_gen = GcDistribution(
+            mean_gc=1., 
+            std_gc=0.05, 
+            seed=1233, 
+            gb_factor=1.0,                # No grain boundary weakening
+            tj_factor=1.0,                # No triple junction weakening  
+            apply_microstructure=False,   # DISABLE microstructure effects
+            noise_type='fractal',         # USE FRACTAL NOISE
+            correlation_length=3.0
+        )
+
+        # Generate fractal Gc distribution
+        self.element_coordinates = np.zeros((self.n_elem, 2))
+
+        for e in range(self.n_elem):
+            nodes = self.connectivity[e]
+            # Element centroid = average of node coordinates
+            self.element_coordinates[e, 0] = np.mean(self.x[nodes])  # x-coordinate
+            self.element_coordinates[e, 1] = np.mean(self.y[nodes])  # y-coordinate
+
+        gc_gen.set_coordinates(self.element_coordinates)
+
+        self.element_gc = gc_gen.generate_element_gc(self.n_elem, self.grain_boundary_flags)
+        
+        # Plot the fractal distribution with spatial visualization
+        gc_gen.plot_distribution(
+            self.element_gc, 
+            self.grain_boundary_flags,
+            coordinates=self.element_coordinates,
+            save_fig=True,
+            output_folder="fractal_analysis"
+        )
+        
+        # Print statistics
+        stats = gc_gen.get_statistics(self.element_gc, self.grain_boundary_flags)
+        print(f"Fractal Gc statistics: {stats}")
+
+
+        # # Set up correlated noise
+        # gc_gen = GcDistribution(
+        #     mean_gc=1., 
+        #     std_gc=0.05, 
+        #     seed=123, 
+        #     gb_factor=1.1, 
+        #     tj_factor=0.9, 
+        #     apply_microstructure=False,
+        #     noise_type='correlated',      # NEW: Choose correlated noise
+        #     correlation_length=3.0        # NEW: Set correlation length
+        # )
+
+        # # NEW: Set coordinates once (before generating Gc)
+        # # CREATE element coordinates (this was missing!)
+        # self.element_coordinates = np.zeros((self.n_elem, 2))
+        # for e in range(self.n_elem):
+        #     nodes = self.connectivity[e]
+        #     # Element centroid = average of node coordinates
+        #     self.element_coordinates[e, 0] = np.mean(self.x[nodes])  # x-coordinate
+        #     self.element_coordinates[e, 1] = np.mean(self.y[nodes])  # y-coordinate
+        # gc_gen.set_coordinates(self.element_coordinates)
+
+        # # Generate Gc values for all elements - SAME METHOD CALL AS BEFORE
+        # self.element_gc = gc_gen.generate_element_gc(self.n_elem, self.grain_boundary_flags)
+        # # Plot the distribution
+        # gc_gen.plot_distribution(self.element_gc, self.grain_boundary_flags)
+        
+        # # Optional: Print statistics
+        # stats = gc_gen.get_statistics(self.element_gc, self.grain_boundary_flags)
+        # print(f"Gc statistics: {stats}")
 
         # Store grain information
         self.element_grain_ids = element_grain_ids
@@ -416,7 +488,11 @@ class AT1_2D_ActiveSet_Solver:
             coords = np.column_stack((self.x[nodes], self.y[nodes]))
             R_ed = np.zeros(3)
             angle = self.element_orientations[e] 
-            is_grain_boundary = self.grain_boundary_flags[e]  # 1 = boundary, 0 = interior
+            # is_triple_junction = self.grain_boundary_flags[e] == 2  # True if triple junction
+            # is_boundary = self.grain_boundary_flags[e] == 1         # True if grain boundary
+            # is_interior = self.grain_boundary_flags[e] == 0         # True if interior
+            gc_value = self.element_gc[e]
+
             D_element_film = self.film_material._compute_stiffness_matrix_crystal(angle)
 
             
@@ -449,10 +525,12 @@ class AT1_2D_ActiveSet_Solver:
                 
                 # Gradient term
                 gradient_term = self.hf*(3./8.)*self.l* (d_grad[0] * dN_dx + d_grad[1] * dN_dy)
-                if is_grain_boundary:
-                    regularization *= 0.5
-                    gradient_term  *= 0.5
-                    
+                # if is_triple_junction:
+                #     regularization *= 0.3
+                #     gradient_term  *= 0.3
+
+                regularization *= gc_value 
+                gradient_term  *= gc_value                   
                     
                     
                 
@@ -715,9 +793,11 @@ class AT1_2D_ActiveSet_Solver:
             coords = np.column_stack((self.x[nodes], self.y[nodes]))
             K_dd = np.zeros((3, 3))
             angle = self.element_orientations[e] 
-            is_grain_boundary = self.grain_boundary_flags[e]  # 1 = boundary, 0 = interior
-
+            # is_triple_junction = self.grain_boundary_flags[e] == 2  # True if triple junction
+            # is_boundary = self.grain_boundary_flags[e] == 1         # True if grain boundary
+            # is_interior = self.grain_boundary_flags[e] == 0         # True if interior
             D_element_film = self.film_material._compute_stiffness_matrix_crystal(angle)
+            gc_value = self.element_gc[e]
 
             
             for gp in range(len(xi_gp)):
@@ -743,10 +823,12 @@ class AT1_2D_ActiveSet_Solver:
                 # GC=0.25
                 # Gradient contribution
                 gradient_contrib = self.hf*(3./8.)*self.l*(np.outer(dN_dx, dN_dx) + np.outer(dN_dy, dN_dy))
-                if is_grain_boundary:
-                    regularization_contrib*=0.5
-                    gradient_contrib*=0.5
-                    
+                # if is_triple_junction:
+                #     regularization_contrib*=0.5
+                #     gradient_contrib*=0.5
+                
+                regularization_contrib *= gc_value
+                gradient_contrib *= gc_value
                     
 
                 # Driving force contribution
@@ -801,7 +883,7 @@ class AT1_2D_ActiveSet_Solver:
             residual_max = np.max(np.abs(damage_residual))
             residual_min = np.min(damage_residual)
             residual_max_pos = np.max(damage_residual)
-            print(f"Damage residual: min={residual_min:.2e}, max={residual_max_pos:.2e}")
+
             
             # Plotting and saving state
             if ((step + 1) % plot_every == 0 or (step + 1) == n_steps or 

@@ -327,7 +327,7 @@ class ProfessionalRectangularMeshGenerator:
         
         # Map to rectangular domain
         self.width = 1.*radius
-        self.height = .5*radius
+        self.height = .9*radius
         self.x_min, self.x_max = -self.width/2, self.width/2
         self.y_min, self.y_max = -self.height/2, self.height/2
         
@@ -787,7 +787,10 @@ class VoronoiGrainGenerator:
         element_angles : array
             Crystal orientation angle in degrees for each element
         grain_boundary_flags : array
-            Flag indicating grain boundary elements (1 = boundary, 0 = interior)
+            Flag indicating element type:
+            0 = grain interior
+            1 = grain boundary (2 grains meet)
+            2 = triple junction (3+ grains meet)
         """
         
         print(f"🔬 Generating {self.n_grains} Voronoi grains...")
@@ -838,14 +841,15 @@ class VoronoiGrainGenerator:
             nearest_grain = np.argmin(distances)
             self.node_grain_ids[node_id] = nearest_grain
         
-        # Now assign element grain IDs and detect grain boundaries
+        # Now assign element grain IDs and detect grain boundaries and triple junctions
         self.element_grain_ids = np.zeros(n_elements, dtype=int)
         self.element_angles = np.zeros(n_elements)
         self.grain_boundary_flags = np.zeros(n_elements, dtype=int)
         
-        print("   Computing element-grain assignments and grain boundaries...")
+        print("   Computing element-grain assignments, grain boundaries, and triple junctions...")
         
         n_boundary_elements = 0
+        n_triple_junction_elements = 0
         
         for elem_id, triangle in enumerate(triangles):
             # Get grain IDs of the three nodes of this element
@@ -853,50 +857,70 @@ class VoronoiGrainGenerator:
             
             # Check if all nodes belong to the same grain
             unique_grains = np.unique(node_grains)
+            n_unique_grains = len(unique_grains)
             
-            if len(unique_grains) == 1:
+            if n_unique_grains == 1:
                 # All nodes belong to same grain - interior element
                 grain_id = unique_grains[0]
                 self.element_grain_ids[elem_id] = grain_id
                 self.element_angles[elem_id] = self.grain_orientations[grain_id]
-                self.grain_boundary_flags[elem_id] = 0
-            else:
-                # Nodes belong to multiple grains - grain boundary element
+                self.grain_boundary_flags[elem_id] = 0  # Interior
+                
+            elif n_unique_grains == 2:
+                # Two grains meet - grain boundary element
                 n_boundary_elements += 1
                 
                 # Assign to the most frequent grain among nodes
                 grain_counts = np.bincount(node_grains, minlength=self.n_grains)
                 dominant_grain = np.argmax(grain_counts)
-                
                 self.element_grain_ids[elem_id] = dominant_grain
                 
-                # For grain boundary elements, calculate angle based on misorientation
-                # between the grains involved
-                if len(unique_grains) == 2:
-                    # Simple case: boundary between two grains
-                    grain1, grain2 = unique_grains[0], unique_grains[1]
-                    angle1 = self.grain_orientations[grain1]
-                    angle2 = self.grain_orientations[grain2]
-                    
-                    # Calculate misorientation angle (smallest angle between orientations)
-                    misorientation = abs(angle1 - angle2)
-                    misorientation = min(misorientation, 180 - misorientation)
-                    
-                    self.element_angles[elem_id] = misorientation
-                else:
-                    # Triple junction or more complex case
-                    # Use average of all involved grain orientations
-                    involved_orientations = self.grain_orientations[unique_grains]
-                    self.element_angles[elem_id] = np.mean(involved_orientations)
+                # Calculate misorientation angle between the two grains
+                grain1, grain2 = unique_grains[0], unique_grains[1]
+                angle1 = self.grain_orientations[grain1]
+                angle2 = self.grain_orientations[grain2]
+                
+                # Calculate misorientation angle (smallest angle between orientations)
+                misorientation = abs(angle1 - angle2)
+                misorientation = min(misorientation, 180 - misorientation)
+                self.element_angles[elem_id] = misorientation
                 
                 # Flag as grain boundary
-                self.grain_boundary_flags[elem_id] = 1
+                self.grain_boundary_flags[elem_id] = 1  # Grain boundary
+                
+            else:  # n_unique_grains >= 3
+                # Three or more grains meet - triple junction (or higher order junction)
+                n_triple_junction_elements += 1
+                
+                # Assign to the most frequent grain among nodes
+                grain_counts = np.bincount(node_grains, minlength=self.n_grains)
+                dominant_grain = np.argmax(grain_counts)
+                self.element_grain_ids[elem_id] = dominant_grain
+                
+                # For triple junctions, calculate average misorientation
+                involved_orientations = self.grain_orientations[unique_grains]
+                
+                # Calculate pairwise misorientations and take average
+                misorientations = []
+                for i in range(len(unique_grains)):
+                    for j in range(i+1, len(unique_grains)):
+                        angle1 = self.grain_orientations[unique_grains[i]]
+                        angle2 = self.grain_orientations[unique_grains[j]]
+                        misorientation = abs(angle1 - angle2)
+                        misorientation = min(misorientation, 180 - misorientation)
+                        misorientations.append(misorientation)
+                
+                self.element_angles[elem_id] = np.mean(misorientations) if misorientations else 0
+                
+                # Flag as triple junction
+                self.grain_boundary_flags[elem_id] = 2  # Triple junction
         
         # Verify all grains are used
         used_grains = np.unique(self.element_grain_ids)
         print(f"   ✅ Generated {len(used_grains)} grains covering {n_elements} elements")
         print(f"   🔄 Crystal orientations: {np.min(self.grain_orientations):.1f}° to {np.max(self.grain_orientations):.1f}°")
         print(f"   🎯 Grain boundary elements: {n_boundary_elements} ({n_boundary_elements/n_elements*100:.1f}%)")
+        print(f"   🔺 Triple junction elements: {n_triple_junction_elements} ({n_triple_junction_elements/n_elements*100:.1f}%)")
         
         return self.element_grain_ids, self.grain_seeds, self.element_angles, self.grain_boundary_flags
     
@@ -907,15 +931,21 @@ class VoronoiGrainGenerator:
             
         n_grains_used = len(np.unique(self.element_grain_ids))
         elements_per_grain = len(self.element_grain_ids) / n_grains_used
-        n_boundary_elements = np.sum(self.grain_boundary_flags) if self.grain_boundary_flags is not None else 0
+        n_interior_elements = np.sum(self.grain_boundary_flags == 0) if self.grain_boundary_flags is not None else 0
+        n_boundary_elements = np.sum(self.grain_boundary_flags == 1) if self.grain_boundary_flags is not None else 0
+        n_triple_junction_elements = np.sum(self.grain_boundary_flags == 2) if self.grain_boundary_flags is not None else 0
         
         return {
             'n_grains_generated': self.n_grains,
             'n_grains_used': n_grains_used,
             'elements_per_grain': elements_per_grain,
             'total_elements': len(self.element_grain_ids),
+            'interior_elements': n_interior_elements,
             'boundary_elements': n_boundary_elements,
-            'boundary_percentage': n_boundary_elements / len(self.element_grain_ids) * 100
+            'triple_junction_elements': n_triple_junction_elements,
+            'interior_percentage': n_interior_elements / len(self.element_grain_ids) * 100,
+            'boundary_percentage': n_boundary_elements / len(self.element_grain_ids) * 100,
+            'triple_junction_percentage': n_triple_junction_elements / len(self.element_grain_ids) * 100
         }
     
     def plot_grain_structure(self, x_coords, y_coords, triangles, save_fig=True, show_boundaries=True):
@@ -967,22 +997,27 @@ class VoronoiGrainGenerator:
         ax1.legend()
         ax1.grid(True, alpha=0.3)
         
-        # Plot 2: Grain boundaries (if requested and available)
+        # Plot 2: Grain boundaries and triple junctions (if requested and available)
         if show_boundaries and self.grain_boundary_flags is not None:
             for elem_id, triangle in enumerate(triangles):
                 element_nodes = vertices[triangle]
-                is_boundary = self.grain_boundary_flags[elem_id]
+                flag = self.grain_boundary_flags[elem_id]
                 
-                if is_boundary:
+                if flag == 0:
+                    # Interior elements in light gray
+                    color = 'lightgray'
+                    alpha = 0.3
+                    linewidth = 0.05
+                elif flag == 1:
                     # Grain boundary elements in red
                     color = 'red'
                     alpha = 0.8
                     linewidth = 0.2
-                else:
-                    # Interior elements in light gray
-                    color = 'lightgray'
-                    alpha = 0.5
-                    linewidth = 0.05
+                else:  # flag == 2
+                    # Triple junction elements in blue
+                    color = 'blue'
+                    alpha = 0.9
+                    linewidth = 0.3
                 
                 triangle_patch = patches.Polygon(element_nodes, 
                                                facecolor=color, 
@@ -994,12 +1029,12 @@ class VoronoiGrainGenerator:
             ax2.set_xlim(np.min(x_coords), np.max(x_coords))
             ax2.set_ylim(np.min(y_coords), np.max(y_coords))
             ax2.set_aspect('equal')
-            ax2.set_title(f'Grain Boundaries (Red = Boundary Elements)')
+            ax2.set_title(f'Grain Boundaries & Triple Junctions\n(Gray=Interior, Red=GB, Blue=TJ)')
             ax2.grid(True, alpha=0.3)
         
         if save_fig:
-            plt.savefig('voronoi_grains_with_boundaries.png', dpi=300, bbox_inches='tight')
-            print("   💾 Grain structure saved to 'voronoi_grains_with_boundaries.png'")
+            plt.savefig('voronoi_grains_with_triple_junctions.png', dpi=300, bbox_inches='tight')
+            print("   💾 Grain structure saved to 'voronoi_grains_with_triple_junctions.png'")
         
         #plt.show()
         
@@ -1011,7 +1046,9 @@ class VoronoiGrainGenerator:
             print(f"   Grains used: {info['n_grains_used']}")
             print(f"   Elements per grain: {info['elements_per_grain']:.1f}")
             print(f"   Total elements: {info['total_elements']}")
+            print(f"   Interior elements: {info['interior_elements']} ({info['interior_percentage']:.1f}%)")
             print(f"   Boundary elements: {info['boundary_elements']} ({info['boundary_percentage']:.1f}%)")
+            print(f"   Triple junction elements: {info['triple_junction_elements']} ({info['triple_junction_percentage']:.1f}%)")
     
     def get_grain_boundary_elements(self):
         """Return indices of elements that are on grain boundaries."""
@@ -1019,52 +1056,804 @@ class VoronoiGrainGenerator:
             return None
         return np.where(self.grain_boundary_flags == 1)[0]
     
+    def get_triple_junction_elements(self):
+        """Return indices of elements that are at triple junctions."""
+        if self.grain_boundary_flags is None:
+            return None
+        return np.where(self.grain_boundary_flags == 2)[0]
+    
+    def get_interior_elements(self):
+        """Return indices of elements that are in grain interiors."""
+        if self.grain_boundary_flags is None:
+            return None
+        return np.where(self.grain_boundary_flags == 0)[0]
+    
+    def get_element_type_counts(self):
+        """Return counts of each element type."""
+        if self.grain_boundary_flags is None:
+            return None
+            
+        unique, counts = np.unique(self.grain_boundary_flags, return_counts=True)
+        result = {}
+        for flag, count in zip(unique, counts):
+            if flag == 0:
+                result['interior'] = count
+            elif flag == 1:
+                result['grain_boundary'] = count
+            elif flag == 2:
+                result['triple_junction'] = count
+        
+        return result
+    
     def get_misorientation_stats(self):
-        """Return statistics about grain boundary misorientations."""
+        """Return statistics about grain boundary and triple junction misorientations."""
         if self.grain_boundary_flags is None or self.element_angles is None:
             return None
             
-        boundary_elements = self.grain_boundary_flags == 1
-        boundary_angles = self.element_angles[boundary_elements]
+        # Separate statistics for grain boundaries and triple junctions
+        gb_elements = self.grain_boundary_flags == 1
+        tj_elements = self.grain_boundary_flags == 2
         
-        if len(boundary_angles) == 0:
-            return None
+        gb_angles = self.element_angles[gb_elements]
+        tj_angles = self.element_angles[tj_elements]
+        
+        stats = {}
+        
+        if len(gb_angles) > 0:
+            stats['grain_boundary'] = {
+                'mean_misorientation': np.mean(gb_angles),
+                'std_misorientation': np.std(gb_angles),
+                'min_misorientation': np.min(gb_angles),
+                'max_misorientation': np.max(gb_angles),
+                'n_elements': len(gb_angles)
+            }
+        
+        if len(tj_angles) > 0:
+            stats['triple_junction'] = {
+                'mean_misorientation': np.mean(tj_angles),
+                'std_misorientation': np.std(tj_angles),
+                'min_misorientation': np.min(tj_angles),
+                'max_misorientation': np.max(tj_angles),
+                'n_elements': len(tj_angles)
+            }
+        
+        return stats
+
+
+
+import numpy as np
+from scipy.spatial.distance import cdist
+
+class GcDistribution:
+    """
+    Generate random Gc distribution for elements with optional microstructure effects.
+    Now supports both uncorrelated and spatially correlated noise.
+    """
+    
+    def __init__(self, mean_gc=1.0, std_gc=0.1, seed=42, 
+                 gb_factor=0.5, tj_factor=0.8, apply_microstructure=True,
+                 noise_type='uncorrelated', correlation_length=3.0):
+        """
+        Initialize Gc distribution generator.
+        
+        Parameters:
+        -----------
+        mean_gc : float
+            Mean value for Gc distribution
+        std_gc : float
+            Standard deviation for Gc distribution
+        seed : int
+            Random seed for reproducibility
+        gb_factor : float
+            Multiplicative factor for grain boundaries
+        tj_factor : float
+            Multiplicative factor for triple junctions
+        apply_microstructure : bool
+            Whether to apply microstructure-based modifications
+        noise_type : str
+            Type of noise to generate. Options:
+            - 'uncorrelated': Original random normal distribution
+            - 'correlated': Spatially correlated noise (requires coordinates)
+            - 'perlin': Perlin-like smooth noise
+            - 'fractal': Fractal/self-similar noise
+            - 'gradient': Linear gradient with fluctuations
+            - 'clusters': Clustered defect regions
+            - 'bands': Banded/layered structure
+            - 'auto': Automatically choose based on available inputs
+        correlation_length : float
+            Spatial correlation length for correlated noise (in mesh units)
+        """
+        self.mean_gc = mean_gc
+        self.std_gc = std_gc
+        self.seed = seed
+        self.gb_factor = gb_factor
+        self.tj_factor = tj_factor
+        self.apply_microstructure = apply_microstructure
+        self.noise_type = noise_type
+        self.correlation_length = correlation_length
+        
+        # Validate noise type
+        valid_types = ['uncorrelated', 'correlated', 'perlin', 'fractal', 'gradient', 'clusters', 'bands', 'auto']
+        if noise_type not in valid_types:
+            raise ValueError(f"noise_type must be one of {valid_types}, got '{noise_type}'")
+    
+    def set_coordinates(self, coordinates):
+        """
+        Set element coordinates for correlated noise generation.
+        Call this before generate_element_gc() if you want correlated noise.
+        
+        Parameters:
+        -----------
+        coordinates : array, shape (n_elements, 2)
+            Element centroid coordinates
+        """
+        self.coordinates = coordinates
+        print(f"✅ Coordinates set for {len(coordinates)} elements")
+    
+    def generate_uncorrelated_gc(self, n_elements):
+        """
+        Generate uncorrelated (original) Gc distribution.
+        
+        Parameters:
+        -----------
+        n_elements : int
+            Number of elements
             
-        return {
-            'mean_misorientation': np.mean(boundary_angles),
-            'std_misorientation': np.std(boundary_angles),
-            'min_misorientation': np.min(boundary_angles),
-            'max_misorientation': np.max(boundary_angles),
-            'n_boundary_elements': len(boundary_angles)
+        Returns:
+        --------
+        element_gc : array
+            Gc values for each element
+        """
+        # Set random seed for reproducibility
+        np.random.seed(self.seed)
+        
+        # Generate base random distribution (original method)
+        element_gc = np.random.normal(self.mean_gc, self.std_gc, n_elements)
+        
+        # Ensure positive values
+        element_gc = np.maximum(element_gc, 0.01)  # Minimum Gc of 0.01
+        
+        return element_gc
+    
+    def generate_correlated_gc(self, coordinates):
+        """
+        Generate spatially correlated Gc distribution.
+        
+        Parameters:
+        -----------
+        coordinates : array, shape (n_elements, 2)
+            Element centroid coordinates
+            
+        Returns:
+        --------
+        element_gc : array
+            Spatially correlated Gc values
+        """
+        np.random.seed(self.seed)
+        n_elements = len(coordinates)
+        
+        # Generate uncorrelated random field
+        random_field = np.random.normal(0, 1, n_elements)
+        
+        # Create spatial correlation matrix
+        distances = cdist(coordinates, coordinates)
+        correlation_matrix = np.exp(-0.5 * (distances / self.correlation_length)**2)
+        
+        try:
+            # Apply correlation using Cholesky decomposition
+            L = np.linalg.cholesky(correlation_matrix + 1e-6 * np.eye(n_elements))
+            correlated_field = L @ random_field
+        except np.linalg.LinAlgError:
+            print("⚠️  Cholesky decomposition failed, using eigendecomposition fallback")
+            # Fallback to eigendecomposition
+            eigenvals, eigenvecs = np.linalg.eigh(correlation_matrix)
+            eigenvals = np.maximum(eigenvals, 1e-6)
+            correlated_field = eigenvecs @ (np.sqrt(eigenvals) * (eigenvecs.T @ random_field))
+        
+        # Scale and shift to desired mean and std
+        correlated_field = correlated_field / np.std(correlated_field) * self.std_gc
+        element_gc = self.mean_gc + correlated_field
+        
+        # Ensure positive values
+        element_gc = np.maximum(element_gc, 0.01)
+        
+        return element_gc
+    
+    def generate_perlin_gc(self, coordinates):
+        """
+        Generate Perlin-like noise for smooth, natural-looking variations.
+        Great for modeling smooth processing variations.
+        
+        Parameters:
+        -----------
+        coordinates : array, shape (n_elements, 2)
+            Element centroid coordinates
+            
+        Returns:
+        --------
+        element_gc : array
+            Perlin noise-based Gc values
+        """
+        np.random.seed(self.seed)
+        n_elements = len(coordinates)
+        
+        # Normalize coordinates to [0, 1] range
+        coord_min = np.min(coordinates, axis=0)
+        coord_max = np.max(coordinates, axis=0)
+        coord_range = coord_max - coord_min
+        coords_norm = (coordinates - coord_min) / (coord_range + 1e-10)
+        
+        # Generate multiple octaves of noise
+        noise = np.zeros(n_elements)
+        amplitude = 1.0
+        frequency = 1.0 / self.correlation_length
+        
+        # Multiple frequency components (octaves)
+        for octave in range(4):
+            # Random phases for this octave
+            phase_x = np.random.uniform(0, 2*np.pi)
+            phase_y = np.random.uniform(0, 2*np.pi)
+            
+            # Sinusoidal noise at this frequency
+            noise_x = np.sin(2*np.pi * frequency * coords_norm[:, 0] + phase_x)
+            noise_y = np.cos(2*np.pi * frequency * coords_norm[:, 1] + phase_y)
+            
+            # Combine with cross terms for more complexity
+            octave_noise = (noise_x + noise_y + 
+                          0.5 * np.sin(2*np.pi * frequency * 
+                                     (coords_norm[:, 0] + coords_norm[:, 1]) + phase_x))
+            
+            noise += amplitude * octave_noise
+            
+            # Prepare for next octave
+            amplitude *= 0.5  # Reduce amplitude
+            frequency *= 2.0  # Increase frequency
+        
+        # Normalize and scale
+        noise = noise / np.std(noise) * self.std_gc
+        element_gc = self.mean_gc + noise
+        
+        # Ensure positive values
+        element_gc = np.maximum(element_gc, 0.01)
+        
+        return element_gc
+    
+    def generate_fractal_gc(self, coordinates, hurst_exponent=0.7):
+        """
+        Generate fractal noise with power-law correlations.
+        Models self-similar material structures.
+        
+        Parameters:
+        -----------
+        coordinates : array, shape (n_elements, 2)
+            Element centroid coordinates
+        hurst_exponent : float (0 < H < 1)
+            Controls roughness: H≈0.2 (very rough), H≈0.8 (smooth)
+            
+        Returns:
+        --------
+        element_gc : array
+            Fractal noise-based Gc values
+        """
+        np.random.seed(self.seed)
+        n_elements = len(coordinates)
+        
+        # Simple fractal approximation using distance-based weighting
+        noise = np.zeros(n_elements)
+        
+        # Generate random "source points" for fractal features
+        n_sources = max(5, int(np.sqrt(n_elements) / 3))
+        coord_min = np.min(coordinates, axis=0)
+        coord_max = np.max(coordinates, axis=0)
+        sources = np.random.uniform(coord_min, coord_max, size=(n_sources, 2))
+        source_strengths = np.random.normal(0, 1, n_sources)
+        
+        for i, coord in enumerate(coordinates):
+            fractal_value = 0
+            for j, source in enumerate(sources):
+                distance = np.linalg.norm(coord - source) + 1e-6
+                # Power-law decay with Hurst exponent
+                contribution = source_strengths[j] * (distance ** (-hurst_exponent))
+                fractal_value += contribution
+            
+            noise[i] = fractal_value
+        
+        # Normalize and scale
+        noise = noise / np.std(noise) * self.std_gc
+        element_gc = self.mean_gc + noise
+        
+        # Ensure positive values
+        element_gc = np.maximum(element_gc, 0.01)
+        
+        return element_gc
+    
+    def generate_gradient_gc(self, coordinates, gradient_direction='random', 
+                           gradient_strength=2.0):
+        """
+        Generate linear/thermal gradient with local fluctuations.
+        Models effects from processing gradients.
+        
+        Parameters:
+        -----------
+        coordinates : array, shape (n_elements, 2)
+            Element centroid coordinates
+        gradient_direction : str or float
+            'random', 'x', 'y', 'radial', or angle in radians
+        gradient_strength : float
+            Strength of the gradient effect
+            
+        Returns:
+        --------
+        element_gc : array
+            Gradient-based Gc values
+        """
+        np.random.seed(self.seed)
+        n_elements = len(coordinates)
+        
+        # Normalize coordinates
+        coord_min = np.min(coordinates, axis=0)
+        coord_max = np.max(coordinates, axis=0)
+        coord_range = coord_max - coord_min
+        coords_norm = (coordinates - coord_min) / (coord_range + 1e-10)
+        
+        # Determine gradient direction
+        if gradient_direction == 'random':
+            angle = np.random.uniform(0, 2*np.pi)
+        elif gradient_direction == 'x':
+            angle = 0
+        elif gradient_direction == 'y':
+            angle = np.pi/2
+        elif gradient_direction == 'radial':
+            # Radial gradient from center
+            center = np.mean(coordinates, axis=0)
+            radial_dist = np.linalg.norm(coordinates - center, axis=1)
+            radial_dist_norm = radial_dist / np.max(radial_dist)
+            
+            gradient_noise = gradient_strength * self.std_gc * radial_dist_norm
+            local_fluctuations = np.random.normal(0, self.std_gc * 0.3, n_elements)
+            
+            element_gc = self.mean_gc + gradient_noise + local_fluctuations
+            element_gc = np.maximum(element_gc, 0.01)
+            return element_gc
+        else:
+            angle = float(gradient_direction)
+        
+        # Linear gradient
+        gradient_vector = np.array([np.cos(angle), np.sin(angle)])
+        projected_coords = coords_norm @ gradient_vector
+        
+        # Apply gradient with local fluctuations
+        gradient_noise = gradient_strength * self.std_gc * projected_coords
+        local_fluctuations = np.random.normal(0, self.std_gc * 0.5, n_elements)
+        
+        element_gc = self.mean_gc + gradient_noise + local_fluctuations
+        
+        # Ensure positive values
+        element_gc = np.maximum(element_gc, 0.01)
+        
+        return element_gc
+    
+    def generate_clusters_gc(self, coordinates, n_clusters=8, cluster_strength=3.0):
+        """
+        Generate clustered defects/weak regions.
+        Models localized material weakening from defects.
+        
+        Parameters:
+        -----------
+        coordinates : array, shape (n_elements, 2)
+            Element centroid coordinates
+        n_clusters : int
+            Number of defect clusters
+        cluster_strength : float
+            Strength of clustering effect
+            
+        Returns:
+        --------
+        element_gc : array
+            Cluster-based Gc values
+        """
+        np.random.seed(self.seed)
+        n_elements = len(coordinates)
+        
+        # Generate cluster centers
+        coord_min = np.min(coordinates, axis=0)
+        coord_max = np.max(coordinates, axis=0)
+        cluster_centers = np.random.uniform(coord_min, coord_max, size=(n_clusters, 2))
+        
+        # Random cluster properties
+        cluster_strengths = np.random.normal(0, cluster_strength * self.std_gc, n_clusters)
+        cluster_sizes = np.random.uniform(self.correlation_length * 0.5, 
+                                        self.correlation_length * 2.0, n_clusters)
+        
+        # Calculate influence of each cluster
+        noise = np.zeros(n_elements)
+        for i, coord in enumerate(coordinates):
+            total_influence = 0
+            for j in range(n_clusters):
+                distance = np.linalg.norm(coord - cluster_centers[j])
+                # Gaussian influence
+                influence = cluster_strengths[j] * np.exp(-0.5 * (distance / cluster_sizes[j])**2)
+                total_influence += influence
+            
+            noise[i] = total_influence
+        
+        # Add background noise
+        background_noise = np.random.normal(0, self.std_gc * 0.5, n_elements)
+        
+        element_gc = self.mean_gc + noise + background_noise
+        
+        # Ensure positive values
+        element_gc = np.maximum(element_gc, 0.01)
+        
+        return element_gc
+    
+    def generate_bands_gc(self, coordinates, band_direction='random', 
+                         band_spacing=None, band_contrast=2.0):
+        """
+        Generate banded/layered structure variations.
+        Models effects from layered deposition or rolling.
+        
+        Parameters:
+        -----------
+        coordinates : array, shape (n_elements, 2)
+            Element centroid coordinates
+        band_direction : str or float
+            'random', 'x', 'y', or angle in radians
+        band_spacing : float, optional
+            Spacing between bands. If None, uses correlation_length
+        band_contrast : float
+            Contrast between bands
+            
+        Returns:
+        --------
+        element_gc : array
+            Band-based Gc values
+        """
+        np.random.seed(self.seed)
+        n_elements = len(coordinates)
+        
+        # Determine band direction
+        if band_direction == 'random':
+            angle = np.random.uniform(0, 2*np.pi)
+        elif band_direction == 'x':
+            angle = 0
+        elif band_direction == 'y':
+            angle = np.pi/2
+        else:
+            angle = float(band_direction)
+        
+        # Band spacing
+        if band_spacing is None:
+            band_spacing = self.correlation_length * 2.0
+        
+        # Normalize coordinates
+        coord_min = np.min(coordinates, axis=0)
+        coord_max = np.max(coordinates, axis=0)
+        coord_range = coord_max - coord_min
+        coords_norm = (coordinates - coord_min) / (coord_range + 1e-10)
+        
+        # Project coordinates onto band direction
+        band_vector = np.array([np.cos(angle), np.sin(angle)])
+        projected_coords = coords_norm @ band_vector
+        
+        # Create banded pattern using sine wave
+        domain_size = np.max(projected_coords) - np.min(projected_coords)
+        frequency = domain_size / band_spacing
+        
+        band_pattern = np.sin(2 * np.pi * frequency * projected_coords)
+        
+        # Add some randomness to band strength
+        random_phase = np.random.uniform(0, 2*np.pi)
+        band_pattern += 0.3 * np.sin(2 * np.pi * frequency * projected_coords + random_phase)
+        
+        # Scale and add noise
+        band_noise = band_contrast * self.std_gc * band_pattern
+        local_noise = np.random.normal(0, self.std_gc * 0.3, n_elements)
+        
+        element_gc = self.mean_gc + band_noise + local_noise
+        
+        # Ensure positive values
+        element_gc = np.maximum(element_gc, 0.01)
+        
+        return element_gc
+    
+    def generate_element_gc(self, n_elements, grain_boundary_flags=None):
+        """
+        Generate Gc values for all elements using the specified noise type.
+        
+        Parameters:
+        -----------
+        n_elements : int
+            Number of elements in the mesh
+        grain_boundary_flags : array, optional
+            Element flags: 0=interior, 1=grain_boundary, 2=triple_junction
+            
+        Returns:
+        --------
+        element_gc : array
+            Gc value for each element
+        """
+        
+        # Check if coordinates are available for correlated noise
+        coordinates = getattr(self, 'coordinates', None)
+        
+        # Determine which noise generation method to use
+        if self.noise_type == 'auto':
+            # Auto-select based on available inputs
+            if coordinates is not None:
+                actual_noise_type = 'correlated'
+                print("🔄 Auto-selected correlated noise (coordinates available)")
+            else:
+                actual_noise_type = 'uncorrelated'
+                print("🔄 Auto-selected uncorrelated noise (no coordinates)")
+        else:
+            actual_noise_type = self.noise_type
+        
+        # Generate base Gc distribution based on selected type
+        if actual_noise_type == 'uncorrelated':
+            element_gc = self.generate_uncorrelated_gc(n_elements)
+            print(f"✅ Generated uncorrelated Gc distribution")
+            
+        elif actual_noise_type == 'correlated':
+            if coordinates is None:
+                print("⚠️  Correlated noise requires coordinates. Use set_coordinates() first or falling back to uncorrelated.")
+                element_gc = self.generate_uncorrelated_gc(n_elements)
+            else:
+                element_gc = self.generate_correlated_gc(coordinates)
+                print(f"✅ Generated correlated Gc distribution (correlation_length={self.correlation_length})")
+        
+        elif actual_noise_type == 'perlin':
+            if coordinates is None:
+                print("⚠️  Perlin noise requires coordinates. Falling back to uncorrelated.")
+                element_gc = self.generate_uncorrelated_gc(n_elements)
+            else:
+                element_gc = self.generate_perlin_gc(coordinates)
+                print(f"✅ Generated Perlin noise Gc distribution")
+        
+        elif actual_noise_type == 'fractal':
+            if coordinates is None:
+                print("⚠️  Fractal noise requires coordinates. Falling back to uncorrelated.")
+                element_gc = self.generate_uncorrelated_gc(n_elements)
+            else:
+                element_gc = self.generate_fractal_gc(coordinates)
+                print(f"✅ Generated fractal noise Gc distribution")
+        
+        elif actual_noise_type == 'gradient':
+            if coordinates is None:
+                print("⚠️  Gradient noise requires coordinates. Falling back to uncorrelated.")
+                element_gc = self.generate_uncorrelated_gc(n_elements)
+            else:
+                element_gc = self.generate_gradient_gc(coordinates)
+                print(f"✅ Generated gradient Gc distribution")
+        
+        elif actual_noise_type == 'clusters':
+            if coordinates is None:
+                print("⚠️  Cluster noise requires coordinates. Falling back to uncorrelated.")
+                element_gc = self.generate_uncorrelated_gc(n_elements)
+            else:
+                element_gc = self.generate_clusters_gc(coordinates)
+                print(f"✅ Generated cluster-based Gc distribution")
+        
+        elif actual_noise_type == 'bands':
+            if coordinates is None:
+                print("⚠️  Band noise requires coordinates. Falling back to uncorrelated.")
+                element_gc = self.generate_uncorrelated_gc(n_elements)
+            else:
+                element_gc = self.generate_bands_gc(coordinates)
+                print(f"✅ Generated banded Gc distribution")
+        
+        # Apply microstructure effects if requested
+        if self.apply_microstructure and grain_boundary_flags is not None:
+            for e in range(n_elements):
+                flag = grain_boundary_flags[e]
+                
+                if flag == 1:  # Grain boundary
+                    element_gc[e] *= self.gb_factor
+                elif flag == 2:  # Triple junction
+                    element_gc[e] *= self.tj_factor
+                # flag == 0 (interior) remains unchanged
+        
+        return element_gc
+    
+    def get_statistics(self, element_gc, grain_boundary_flags=None):
+        """
+        Get statistics about the generated Gc distribution.
+        
+        Parameters:
+        -----------
+        element_gc : array
+            Generated Gc values
+        grain_boundary_flags : array, optional
+            Element flags for detailed statistics
+            
+        Returns:
+        --------
+        stats : dict
+            Statistics dictionary
+        """
+        stats = {
+            'mean_gc': np.mean(element_gc),
+            'std_gc': np.std(element_gc),
+            'min_gc': np.min(element_gc),
+            'max_gc': np.max(element_gc),
+            'total_elements': len(element_gc),
+            'noise_type': self.noise_type,
+            'correlation_length': self.correlation_length if self.noise_type in ['correlated', 'auto'] else None
         }
+        
+        if grain_boundary_flags is not None:
+            # Separate statistics by element type
+            interior_mask = grain_boundary_flags == 0
+            gb_mask = grain_boundary_flags == 1
+            tj_mask = grain_boundary_flags == 2
+            
+            if np.any(interior_mask):
+                stats['interior_gc_mean'] = np.mean(element_gc[interior_mask])
+                stats['interior_gc_std'] = np.std(element_gc[interior_mask])
+                
+            if np.any(gb_mask):
+                stats['gb_gc_mean'] = np.mean(element_gc[gb_mask])
+                stats['gb_gc_std'] = np.std(element_gc[gb_mask])
+                
+            if np.any(tj_mask):
+                stats['tj_gc_mean'] = np.mean(element_gc[tj_mask])
+                stats['tj_gc_std'] = np.std(element_gc[tj_mask])
+        
+        return stats
+    
+    def plot_distribution(self, element_gc, grain_boundary_flags=None, coordinates=None, save_fig=True, output_folder="plots"):
+        """
+        Plot histogram of Gc distribution with spatial visualization if coordinates provided.
+        
+        Parameters:
+        -----------
+        element_gc : array
+            Generated Gc values
+        grain_boundary_flags : array, optional
+            Element flags for color coding
+        coordinates : array, optional
+            Element coordinates for spatial plot
+        save_fig : bool
+            Whether to save the figure
+        output_folder : str
+            Folder to save the plot
+        """
+        import matplotlib.pyplot as plt
+        import os
+        
+        # Create output folder if it doesn't exist
+        if save_fig and not os.path.exists(output_folder):
+            os.makedirs(output_folder)
+        
+        # Determine subplot layout
+        if coordinates is not None:
+            fig = plt.figure(figsize=(20, 6))
+            gs = fig.add_gridspec(1, 3, width_ratios=[1, 1, 1])
+            ax1 = fig.add_subplot(gs[0])
+            ax2 = fig.add_subplot(gs[1])
+            ax3 = fig.add_subplot(gs[2])
+        else:
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
+            ax3 = None
+        
+        # Overall distribution histogram
+        ax1.hist(element_gc, bins=50, alpha=0.7, color='blue', edgecolor='black')
+        ax1.axvline(np.mean(element_gc), color='red', linestyle='--', 
+                   label=f'Mean: {np.mean(element_gc):.3f}')
+        ax1.axvline(np.mean(element_gc) + np.std(element_gc), color='orange', 
+                   linestyle='--', alpha=0.7, label=f'±1σ')
+        ax1.axvline(np.mean(element_gc) - np.std(element_gc), color='orange', 
+                   linestyle='--', alpha=0.7)
+        ax1.set_xlabel('Gc')
+        ax1.set_ylabel('Frequency')
+        ax1.set_title(f'Gc Distribution ({self.noise_type} noise)')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+        
+        # Distribution by element type
+        if grain_boundary_flags is not None:
+            interior_gc = element_gc[grain_boundary_flags == 0]
+            gb_gc = element_gc[grain_boundary_flags == 1]
+            tj_gc = element_gc[grain_boundary_flags == 2]
+            
+            if len(interior_gc) > 0:
+                ax2.hist(interior_gc, bins=30, alpha=0.7, color='green', 
+                        label=f'Interior (n={len(interior_gc)})', edgecolor='black')
+            if len(gb_gc) > 0:
+                ax2.hist(gb_gc, bins=30, alpha=0.7, color='red', 
+                        label=f'Grain Boundary (n={len(gb_gc)})', edgecolor='black')
+            if len(tj_gc) > 0:
+                ax2.hist(tj_gc, bins=30, alpha=0.7, color='blue', 
+                        label=f'Triple Junction (n={len(tj_gc)})', edgecolor='black')
+                
+            ax2.set_xlabel('Gc')
+            ax2.set_ylabel('Frequency')
+            ax2.set_title('Gc Distribution by Element Type')
+            ax2.legend()
+            ax2.grid(True, alpha=0.3)
+        else:
+            ax2.axis('off')
+        
+        # Spatial distribution plot
+        if coordinates is not None and ax3 is not None:
+            scatter = ax3.scatter(coordinates[:, 0], coordinates[:, 1], 
+                                c=element_gc, s=2, cmap='viridis')
+            ax3.set_xlabel('X coordinate')
+            ax3.set_ylabel('Y coordinate')
+            ax3.set_title('Spatial Gc Distribution')
+            ax3.set_aspect('equal')
+            plt.colorbar(scatter, ax=ax3, shrink=0.8, label='Gc')
+        
+        plt.tight_layout()
+        
+        if save_fig:
+            filename = f'gc_distribution_{self.noise_type}.png'
+            filepath = os.path.join(output_folder, filename)
+            plt.savefig(filepath, dpi=300, bbox_inches='tight')
+            print(f"   💾 Gc distribution saved to '{filepath}'")
+        
+        return fig
 
 
-# Example usage and testing
+# =============================================================================
+# USAGE EXAMPLES
+# =============================================================================
+
+def demonstrate_noise_types():
+    """
+    Demonstrate different noise types with the same parameters.
+    """
+    # Create example mesh coordinates
+    nx, ny = 50, 30
+    x = np.linspace(0, 10, nx)
+    y = np.linspace(0, 6, ny)
+    X, Y = np.meshgrid(x, y)
+    coordinates = np.column_stack([X.ravel(), Y.ravel()])
+    n_elements = len(coordinates)
+    
+    # Create some grain boundary flags
+    grain_boundary_flags = np.zeros(n_elements, dtype=int)
+    gb_mask = ((coordinates[:, 0] % 3) < 0.2) | ((coordinates[:, 1] % 2) < 0.2)
+    grain_boundary_flags[gb_mask] = 1
+    
+    # Common parameters
+    common_params = {
+        'mean_gc': 1.0,
+        'std_gc': 0.1,
+        'seed': 42,
+        'gb_factor': 0.7,
+        'tj_factor': 0.5,
+        'apply_microstructure': True
+    }
+    
+    print("🔬 Demonstrating different noise types")
+    print("=" * 60)
+    
+    # Test each noise type
+    noise_types = ['uncorrelated', 'correlated', 'perlin', 'fractal', 'gradient', 'clusters', 'bands', 'auto']
+    
+    for noise_type in noise_types:
+        print(f"\n📊 Testing {noise_type} noise...")
+        
+        # Initialize generator
+        gc_gen = GcDistribution(
+            noise_type=noise_type,
+            correlation_length=2.0,
+            **common_params
+        )
+        
+        # Set coordinates for spatial noise types
+        if noise_type != 'uncorrelated':
+            gc_gen.set_coordinates(coordinates)
+        
+        # Generate Gc values
+        element_gc = gc_gen.generate_element_gc(n_elements, grain_boundary_flags)
+        
+        # Get statistics
+        stats = gc_gen.get_statistics(element_gc, grain_boundary_flags)
+        print(f"   Mean: {stats['mean_gc']:.3f}, Std: {stats['std_gc']:.3f}")
+        print(f"   Range: {stats['min_gc']:.3f} - {stats['max_gc']:.3f}")
+
+
 if __name__ == "__main__":
-    print("=== TESTING ENHANCED VORONOI GRAIN GENERATOR ===")
-    
-    # This would need the mesh generators from your original code
-    # For demonstration, showing how to use the enhanced functionality:
-    
-    """
-    # Generate a mesh first (using your existing mesh generators)
-    circular_gen = ProfessionalCircularMeshGenerator(radius=1.0, target_edge_length=0.08)
-    x, y, conn, boundary, n_nodes, n_elem = circular_gen.generate_mesh()
-    
-    # Generate grains with boundary detection
-    grain_gen = VoronoiGrainGenerator(n_grains=15, seed=42)
-    element_grains, grain_seeds, element_angles, boundary_flags = grain_gen.generate_grains(x, y, conn)
-    
-    # Plot results showing both grains and boundaries
-    grain_gen.plot_grain_structure(x, y, conn, show_boundaries=True)
-    
-    # Get boundary element statistics
-    boundary_elements = grain_gen.get_grain_boundary_elements()
-    print(f"Boundary element indices: {boundary_elements}")
-    
-    # Get misorientation statistics
-    misorientation_stats = grain_gen.get_misorientation_stats()
-    if misorientation_stats:
-        print(f"Average misorientation: {misorientation_stats['mean_misorientation']:.2f}°")
-        print(f"Misorientation range: {misorientation_stats['min_misorientation']:.2f}° - {misorientation_stats['max_misorientation']:.2f}°")
-    """
+    demonstrate_noise_types()
